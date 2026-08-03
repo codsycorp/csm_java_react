@@ -19,11 +19,81 @@ import { usePreferencesStore } from "#src/store";
 export function useWebsiteMenu() {
   const { t, i18n } = useTranslation();
   const { changeLanguage } = usePreferencesStore();
+  const initialCategories: SSRCategoryObject[] =
+    (typeof window !== 'undefined' && Array.isArray((window as any).__SSR_WEBSITE_CATEGORIES__))
+      ? (window as any).__SSR_WEBSITE_CATEGORIES__
+      : [];
+  const [ssrCategoryObjects, setSsrCategoryObjects] = React.useState<SSRCategoryObject[]>(initialCategories);
+
   const getPriority = (cat: SSRCategoryObject): number => {
     const raw = (cat as any).attributes_priority;
     const n = Number(raw);
     return Number.isFinite(n) ? n : 999;
   };
+
+  const getBackendBaseUrl = () => {
+    if (typeof window !== 'undefined') {
+      const hostname = window.location.hostname;
+      const port = window.location.port;
+      if ((hostname === 'localhost' || hostname === '127.0.0.1') && (port === '3333' || port === '5173')) {
+        return 'http://localhost:9999';
+      }
+      return window.location.origin;
+    }
+
+    const apiBase = import.meta.env.VITE_API_BASE_URL;
+    if (apiBase && apiBase !== '/' && apiBase !== '') {
+      return apiBase.replace(/\/api\/?$/, '');
+    }
+
+    return '';
+  };
+
+  React.useEffect(() => {
+    let cancelled = false;
+
+    async function loadCategoriesIfMissing() {
+      if (typeof window === 'undefined') return;
+
+      const existing = Array.isArray((window as any).__SSR_WEBSITE_CATEGORIES__)
+        ? (window as any).__SSR_WEBSITE_CATEGORIES__
+        : [];
+      if (existing.length > 0) {
+        setSsrCategoryObjects(existing);
+        return;
+      }
+
+      try {
+        const backendBase = getBackendBaseUrl();
+        if (!backendBase) return;
+
+        const response = await fetch(`${backendBase}/ssr/categories`, {
+          credentials: 'include',
+          headers: { Accept: 'application/json' },
+        });
+        if (!response.ok) return;
+
+        const payload = await response.json();
+        const categories = Array.isArray(payload?.data)
+          ? payload.data
+          : (Array.isArray(payload?.rows) ? payload.rows : []);
+
+        if (cancelled || !Array.isArray(categories) || categories.length === 0) return;
+
+        (window as any).__SSR_WEBSITE_CATEGORIES__ = categories;
+        setSsrCategoryObjects(categories);
+      } catch (err) {
+        console.warn('[useWebsiteMenu] Failed to load SSR categories fallback:', err);
+      }
+    }
+
+    void loadCategoriesIfMissing();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Lấy ngôn ngữ hiện tại từ i18n hoặc store
   React.useEffect(() => {
     function syncLangFromUrl() {
@@ -59,8 +129,6 @@ export function useWebsiteMenu() {
     // Chỉ thêm ?hl=xx cho các trang wu_
     return path + (path.includes('?') ? `&hl=${lang.slice(0,2)}` : `?hl=${lang.slice(0,2)}`);
   };
-  // Import SSR category object type
-  const ssrCategoryObjects: SSRCategoryObject[] = (typeof window !== 'undefined' && (window as any).__SSR_WEBSITE_CATEGORIES__) || [];
 
   // Helper: map icon name to AntD icon
   const iconMap: Record<string, React.ReactNode> = {
@@ -183,16 +251,16 @@ export function useWebsiteMenu() {
     return filteredServiceGroupMenus.find((m) => m.key === `/${slug}`);
   };
 
-  const hasTargetMenuParents = [
-    'thong-ke-ket-qua-xo-so',
-    'cau-noi-kinh-doanh-online',
-  ].every((slug) => bySlug.has(slug));
+  const getFallbackLabel = (labels: { vi: string; en: string; zh: string }) => {
+    const currentLang = i18n.language || 'vi-VN';
+    if (currentLang.includes('en')) return labels.en;
+    if (currentLang.includes('zh')) return labels.zh;
+    return labels.vi;
+  };
 
   const resolvedTargetMenus = (() => {
-    if (!hasTargetMenuParents) return null;
-
     const lotteryParent = findGroupMenu('thong-ke-ket-qua-xo-so');
-    const bridgeParent = findGroupMenu('cau-noi-kinh-doanh-online');
+    const bridgeParent = findGroupMenu('hop-tac-kinh-doanh');
 
     const lotteryChildren: any[] = [];
 
@@ -212,15 +280,23 @@ export function useWebsiteMenu() {
     return [
       {
         key: '/thong-ke-ket-qua-xo-so',
-        label: lotteryParent?.label || t('website.menu.lotteryStats', 'Thống Kê Kết Quả Xổ Số'),
+        label: lotteryParent?.label || getFallbackLabel({
+          vi: 'Thống Kê Kết Quả Xổ Số',
+          en: 'Lottery Statistics',
+          zh: '彩票统计',
+        }),
         path: lotteryParent?.path || buildPath('/thong-ke-ket-qua-xo-so'),
         icon: lotteryParent?.icon || <DatabaseOutlined />,
         children: lotteryChildren,
       },
       {
-        key: '/cau-noi-kinh-doanh-online',
-        label: bridgeParent?.label || t('website.menu.businessBridge', 'Cầu Nối Kinh Doanh Online'),
-        path: bridgeParent?.path || buildPath('/cau-noi-kinh-doanh-online'),
+        key: '/hop-tac-kinh-doanh',
+        label: bridgeParent?.label || getFallbackLabel({
+          vi: 'Hợp Tác Kinh Doanh',
+          en: 'Business Partnership',
+          zh: '商业合作',
+        }),
+        path: bridgeParent?.path || buildPath('/hop-tac-kinh-doanh'),
         icon: bridgeParent?.icon || <ShoppingCartOutlined />,
         children: bridgeChildren,
       },

@@ -15,7 +15,7 @@ func AuthMiddleware(st *state.AppState) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			uri := r.URL.Path
-			host := extractHost(r.Header)
+			host := extractHost(r)
 			clean := strings.TrimPrefix(uri, "/api")
 
 			// Mirror CatchAll: bare API paths on non-admin hosts (localhost:9999, vite proxy rewrite)

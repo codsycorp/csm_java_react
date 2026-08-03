@@ -70,6 +70,7 @@ func ServeFeedXML(st *state.AppState, w http.ResponseWriter, host string) {
 			} else {
 				path = "/" + svcType + "/" + slug
 			}
+			path = canonicalSEOPath(path)
 			url := baseURL + path
 			lastmod := extractDateOnly(resolveLastmodFromRow(row))
 			feed += fmt.Sprintf("    <item>\n      <title><![CDATA[%s]]></title>\n      <link>%s</link>\n      <guid>%s</guid>\n", title, url, url)
@@ -101,7 +102,7 @@ func loadRouteConfigs(st *state.AppState, domain string) []routeConfig {
 	filter := model.SearchFilter{
 		Operator: "AND",
 		Conditions: []model.SearchFilter{
-			model.EqFilter("domain_name", domain),
+			{Field: "domain_name", FilterType: "like", Value: domain},
 			model.EqFilter("run", 1),
 		},
 	}
@@ -403,4 +404,3 @@ func ServeAppImages(st *state.AppState, w http.ResponseWriter, r *http.Request, 
 	}
 	writeFileResponse(w, path, data)
 }
-

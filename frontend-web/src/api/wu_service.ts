@@ -16,20 +16,21 @@ const TABLE_TO_SERVICE_CODE: Record<string, string> = {
 
 // Get backend API base URL
 function getBackendUrl(): string {
+  // Prefer local backend when running the website on localhost.
+  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+    const port = window.location.port;
+    if (port === '3333' || port === '5173') {
+      return 'http://localhost:9999';
+    }
+  }
+
   // Use VITE_API_BASE_URL from environment
   const apiBase = import.meta.env.VITE_API_BASE_URL;
   if (apiBase && apiBase !== '/' && apiBase !== '') {
     // Remove /api suffix if present (we'll add it later for regular API calls)
     return apiBase.replace(/\/api\/?$/, '');
   }
-  
-  // Fallback: In dev, backend is usually on 15300
-  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-    const port = window.location.port;
-    if (port === '3333' || port === '5173') {
-      return 'http://localhost:15300';
-    }
-  }
+
   // Production: same origin
   return window.location.origin;
 }

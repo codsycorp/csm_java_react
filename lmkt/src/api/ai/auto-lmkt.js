@@ -425,65 +425,198 @@ if (typeof window !== 'undefined') {
       || ''
     ).trim();
 
-    const defaultKqxsSeoContent = `
-      <article>
-        <h1>Hệ Thống Thống Kê Giải Đặc Biệt Và Phân Tích Dữ Liệu Kết Quả Xổ Số 3 Miền</h1>
-        <p>Nền tảng tự động phân tích dữ liệu xổ số kiến thiết Miền Bắc, Miền Trung, Miền Nam theo chu kỳ thời gian 30, 100 và 365 ngày.</p>
-        <div style="background:#eff6ff;border-left:4px solid #2563eb;padding:14px;margin:16px 0;">
-          <strong>Tuyên bố pháp lý:</strong> Nội dung chỉ phục vụ mục đích thống kê dữ liệu tham khảo. Hệ thống không hỗ trợ cá cược và không khuyến khích hành vi vi phạm pháp luật Việt Nam.
-        </div>
-        <h2>1. Thống kê giải đặc biệt theo tuần và theo tổng</h2>
-        <p>Công cụ cung cấp bảng thống kê giải đặc biệt theo tuần, theo tổng và xu hướng biến động theo từng mốc ngày để người dùng theo dõi dữ liệu minh bạch.</p>
-        <ul>
-          <li><strong>Thống kê giải đặc biệt theo tuần:</strong> Theo dõi phân bố dãy số theo chu kỳ ngày trong tuần.</li>
-          <li><strong>Thống kê giải đặc biệt theo tổng:</strong> Nhóm dữ liệu theo tổng hai số cuối để quan sát cụm phân bổ.</li>
-          <li><strong>Thống kê miền bắc:</strong> Tổng hợp dữ liệu theo từng đài và nhiều khoảng thời gian.</li>
-        </ul>
-        <h2>2. Thống kê lô, tần suất lô tô và lô gan</h2>
-        <p>Hệ thống đo tần suất lô tô cho các cặp số 00-99, đồng thời hiển thị khoảng trễ dữ liệu thường được gọi là lô gan miền bắc, lô gan mb và lô gan miền nam.</p>
-        <p>Dữ liệu được trình bày theo cách trung lập, không đưa ra khuyến nghị cá cược.</p>
-        <h2>3. Thống kê kết quả xổ số miền bắc 100 ngày</h2>
-        <p>Người dùng có thể tra cứu thống kê kết quả xổ số miền bắc 100 ngày, xsmb theo tuần và lịch sử biến động để so sánh theo từng giai đoạn.</p>
-        <table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;width:100%;">
-          <thead>
-            <tr>
-              <th>Chỉ số</th>
-              <th>Khoảng dữ liệu</th>
-              <th>Cách xử lý</th>
-              <th>Giá trị tham khảo</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>Tần suất xuất hiện</td>
-              <td>30 - 100 kỳ quay</td>
-              <td>Đếm số lần và chuẩn hóa</td>
-              <td>Đánh giá độ ổn định của dãy số</td>
-            </tr>
-            <tr>
-              <td>Giải đặc biệt đa chiều</td>
-              <td>Theo tuần, theo tổng</td>
-              <td>Phân nhóm chuỗi số cuối</td>
-              <td>Trực quan hóa xu hướng</td>
-            </tr>
-            <tr>
-              <td>Khoảng trễ phân bố</td>
-              <td>Tối đa 500 kỳ gần nhất</td>
-              <td>Đo độ lệch xác suất</td>
-              <td>Theo dõi nhóm số ít xuất hiện</td>
-            </tr>
-          </tbody>
-        </table>
-        <h2>4. Kết luận</h2>
-        <p>Các bảng thống kê giải đặc biệt, thống kê xổ số miền bắc và tần suất lô tô hỗ trợ người dùng tiếp cận dữ liệu theo hướng khoa học, hợp pháp và minh bạch.</p>
-      </article>
-    `;
+    const buildKqxsStructuredContent = (lang = 'vi') => {
+      if (lang === 'en') {
+        return `
+          <article>
+            <h3>Lottery Results Statistics and Data Lookup for Three Regions</h3>
+            <p>This page is designed for readers who want to review lottery data in a clear and organized way. The content focuses on transparent statistics, daily lookup, date filters, weekday filters, and regional comparisons instead of betting language or prediction claims.</p>
+            <p>The system brings together special-prize statistics, loto frequency, long-gap analysis, weekly tracking, and 100-day result views. You can compare North, Central, and South regions, inspect the latest results, and export or capture the table for personal reference.</p>
+            <div style="background:#eff6ff;border-left:4px solid #2563eb;padding:14px;margin:16px 0;">
+              <strong>Legal note:</strong> This content is for reference and statistics only. It does not support betting, gambling, or any activity that violates Vietnamese law.
+            </div>
+            <h4>1. Special-prize statistics by week and by total</h4>
+            <p>The first section helps users review special-prize movements through weekly grouping and total-based grouping. This is useful when someone wants to observe how a result changes across time instead of reading isolated numbers.</p>
+            <ul>
+              <li><strong>Weekly statistics:</strong> Track how special-prize data appears across the days of a week.</li>
+              <li><strong>Total grouping:</strong> Group the last two digits into clusters for easier visual comparison.</li>
+              <li><strong>Regional comparison:</strong> Compare different stations and regions on a neutral statistical basis.</li>
+            </ul>
+            <h4>2. Loto frequency, long-gap numbers, and result trends</h4>
+            <p>The second section focuses on loto frequency and long-gap metrics. Users can review which numbers appear more often, which numbers have gone longer without appearing, and how those values change across different ranges of results.</p>
+            <h4>3. 100-day Northern result statistics and weekly lookup</h4>
+            <p>The third section provides 100-day Northern lottery statistics, weekly xSMB lookup, and date-based filtering. This is useful for readers who want to compare short-term and long-term data without leaving the page.</p>
+            <table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;width:100%;">
+              <thead>
+                <tr>
+                  <th>Metric</th>
+                  <th>Data Range</th>
+                  <th>Processing Method</th>
+                  <th>Reference Value</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Appearance frequency</td>
+                  <td>30 - 100 draws</td>
+                  <td>Count and normalize occurrences</td>
+                  <td>Review how consistently numbers show up</td>
+                </tr>
+                <tr>
+                  <td>Special-prize grouping</td>
+                  <td>By week and by total</td>
+                  <td>Cluster number-ending patterns</td>
+                  <td>Visualize broad trends</td>
+                </tr>
+                <tr>
+                  <td>Gap analysis</td>
+                  <td>Up to 500 recent draws</td>
+                  <td>Measure no-show intervals</td>
+                  <td>Track low-frequency numbers</td>
+                </tr>
+              </tbody>
+            </table>
+            <h4>4. Export, capture, and table review utilities</h4>
+            <p>The page is also built for practical workflow support. Users can export the table to Excel, capture a screenshot of the current grid, or review the result table by station and time range.</p>
+            <h4>5. Clear navigation and filtering</h4>
+            <p>Filters for date, weekday, region, station, and statistic type help the user navigate quickly. Rather than forcing one fixed view, the page lets each reader choose the slice of information they actually need.</p>
+            <h4>6. Responsible use and closing note</h4>
+            <p><em>If you want a clean, statistics-first page for lottery data lookup, this structure keeps the content readable, searchable, and compliant.</em></p>
+          </article>
+        `;
+      }
+
+      if (lang === 'zh') {
+        return `
+          <article>
+            <h3>三地彩票开奖数据统计与查询页面</h3>
+            <p>本页面专为想要清晰查看彩票开奖数据的读者设计。内容重点放在统计查询、日期筛选、星期筛选、地区对比与历史趋势分析，而不是投注或预测语言。</p>
+            <p>系统整合了特别奖统计、号码频率、长间隔号码、每周追踪以及100天历史视图。你可以查看北部、中部、南部数据，对比各个站点，导出表格或截取当前画面留作参考。</p>
+            <div style="background:#eff6ff;border-left:4px solid #2563eb;padding:14px;margin:16px 0;">
+              <strong>法律声明：</strong> 本内容仅供参考与统计使用，不支持博彩、赌博或任何违反越南法律的行为。
+            </div>
+            <h4>1. 按星期与按总和查看特别奖统计</h4>
+            <p>第一部分帮助用户通过星期分组和总和分组查看特别奖变化。这样可以更方便地观察号码在时间上的变化，而不是只看单独一次开奖。</p>
+            <ul>
+              <li><strong>星期统计：</strong> 追踪特别奖在一周不同日期中的分布情况。</li>
+              <li><strong>总和分组：</strong> 将后两位数字归类，便于视觉对比。</li>
+              <li><strong>地区对比：</strong> 以中立的统计方式比较不同地区和站点。</li>
+            </ul>
+            <h4>2. 号码频率、长间隔号码与趋势</h4>
+            <p>第二部分聚焦号码频率和长间隔指标。用户可以查看哪些号码出现得更频繁、哪些号码已经较长时间没有出现，以及这些指标在不同数据范围中的变化。</p>
+            <h4>3. 北部100天统计与按周查询</h4>
+            <p>第三部分提供北部100天历史统计、按周查询以及按日期筛选。对于想比较短期与长期数据的用户来说，这一部分非常实用。</p>
+            <table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;width:100%;">
+              <thead>
+                <tr>
+                  <th>指标</th>
+                  <th>数据范围</th>
+                  <th>处理方式</th>
+                  <th>参考价值</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>出现频率</td>
+                  <td>30 - 100 期</td>
+                  <td>统计并归一化</td>
+                  <td>观察号码稳定性</td>
+                </tr>
+                <tr>
+                  <td>特别奖分组</td>
+                  <td>按周、按总和</td>
+                  <td>归类尾数模式</td>
+                  <td>可视化趋势</td>
+                </tr>
+                <tr>
+                  <td>遗漏分析</td>
+                  <td>最近最多500期</td>
+                  <td>计算未出现间隔</td>
+                  <td>追踪低频号码</td>
+                </tr>
+              </tbody>
+            </table>
+            <h4>4. 导出、截图与表格工具</h4>
+            <p>页面也支持常用工作流：导出 Excel、截取当前表格、按站点与时间范围查看数据。这样用户可以更方便地保存笔记并在之后进行对照。</p>
+            <h4>5. 清晰的筛选与导航</h4>
+            <p>日期、星期、地区、站点和统计类型筛选让用户更快找到需要的内容。页面不是固定视图，而是让每个读者都能选择自己真正需要的那一段数据。</p>
+            <h4>6. 负责任的使用说明</h4>
+            <p><em>如果你需要一个以统计为核心的开奖数据页面，这种结构可以让内容更清晰、更适合搜索引擎，也更符合合规要求。</em></p>
+          </article>
+        `;
+      }
+
+      return `
+        <article>
+          <h3>Hệ Thống Thống Kê Giải Đặc Biệt Và Tra Cứu KQXS 3 Miền</h3>
+          <p>Trang này được xây để người đọc tra cứu dữ liệu xổ số theo cách rõ ràng, có cấu trúc và dễ đọc trên cả điện thoại lẫn máy tính. Thay vì dùng ngôn ngữ cổ vũ cá cược hay dự đoán, nội dung tập trung vào thống kê công khai, bộ lọc theo ngày, theo thứ, theo miền và so sánh dữ liệu giữa các đài.</p>
+          <p>Hệ thống gom nhiều lớp dữ liệu vào cùng một trang: thống kê giải đặc biệt theo tuần, theo tổng; tần suất lô tô; lô gan miền Bắc, lô gan MB, lô gan miền Nam; thống kê kết quả xổ số miền Bắc 100 ngày; và bảng so sánh theo từng đài.</p>
+          <div style="background:#eff6ff;border-left:4px solid #2563eb;padding:14px;margin:16px 0;">
+            <strong>Tuyên bố pháp lý:</strong> Nội dung chỉ phục vụ mục đích thống kê dữ liệu tham khảo. Hệ thống không hỗ trợ cá cược và không khuyến khích hành vi vi phạm pháp luật Việt Nam.
+          </div>
+          <h4>1. Thống kê giải đặc biệt theo tuần và theo tổng</h4>
+          <p>Phần đầu tiên giúp người dùng xem giải đặc biệt theo nhiều lát cắt khác nhau. Khi gom theo tuần, bạn có thể thấy dữ liệu di chuyển như thế nào giữa các ngày trong tuần; khi gom theo tổng, bạn có thể nhìn ra cụm phân bố của hai số cuối.</p>
+          <ul>
+            <li><strong>Thống kê giải đặc biệt theo tuần:</strong> Theo dõi phân bố dãy số theo chu kỳ ngày trong tuần để có góc nhìn dài hơn.</li>
+            <li><strong>Thống kê giải đặc biệt theo tổng:</strong> Nhóm dữ liệu theo tổng hai số cuối để quan sát cụm phân bổ rõ hơn.</li>
+            <li><strong>Thống kê miền Bắc:</strong> Tổng hợp dữ liệu theo từng đài, hỗ trợ so sánh theo nhiều khoảng thời gian.</li>
+          </ul>
+          <h4>2. Thống kê lô, tần suất lô tô và lô gan</h4>
+          <p>Phần thứ hai tập trung vào bảng số 00-99, cách các cặp số xuất hiện theo thời gian và khoảng trễ giữa các lần xuất hiện. Người đọc thường dùng phần này để xem lại tần suất lô tô, lô gan miền Bắc hoặc lô gan miền Nam dưới góc nhìn dữ liệu.</p>
+          <p>Nếu một số xuất hiện dày, người dùng có thể nhìn thấy ngay trong bảng thống kê; nếu một số ít xuất hiện hơn, hệ thống sẽ thể hiện khoảng trễ để dễ đối chiếu với lịch sử.</p>
+          <h4>3. Thống kê kết quả xổ số miền Bắc 100 ngày</h4>
+          <p>Phần thứ ba mở rộng cửa sổ dữ liệu sang 100 ngày gần nhất để người đọc so sánh theo giai đoạn. Đây là kiểu xem dữ liệu phù hợp với nhu cầu quan sát thay đổi trong dài hạn.</p>
+          <table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;width:100%;">
+            <thead>
+              <tr>
+                <th>Chỉ số</th>
+                <th>Khoảng dữ liệu</th>
+                <th>Cách xử lý</th>
+                <th>Giá trị tham khảo</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Tần suất xuất hiện</td>
+                <td>30 - 100 kỳ quay</td>
+                <td>Đếm số lần và chuẩn hóa</td>
+                <td>Đánh giá độ ổn định của dãy số</td>
+              </tr>
+              <tr>
+                <td>Giải đặc biệt đa chiều</td>
+                <td>Theo tuần, theo tổng</td>
+                <td>Phân nhóm chuỗi số cuối</td>
+                <td>Trực quan hóa xu hướng</td>
+              </tr>
+              <tr>
+                <td>Khoảng trễ phân bố</td>
+                <td>Tối đa 500 kỳ gần nhất</td>
+                <td>Đo độ lệch xác suất</td>
+                <td>Theo dõi nhóm số ít xuất hiện</td>
+              </tr>
+            </tbody>
+          </table>
+          <h4>4. Bộ lọc theo ngày, theo thứ và theo đài</h4>
+          <p>Người dùng có thể lọc theo khoảng ngày, theo thứ trong tuần, theo miền và theo đài cụ thể. Đây là điểm quan trọng để chuyển từ một bảng dữ liệu lớn sang một lát cắt nhỏ, đúng nhu cầu tìm kiếm.</p>
+          <h4>5. Xuất Excel, chụp bảng và lưu dữ liệu</h4>
+          <p>Hệ thống hỗ trợ xuất Excel, chụp bảng và lưu lại kết quả để xem sau. Điều này hữu ích cho những ai muốn ghi chú cá nhân hoặc đối chiếu nhiều giai đoạn thống kê cùng lúc.</p>
+          <h4>6. Kết luận và lưu ý sử dụng</h4>
+          <p>Toàn bộ nội dung được xây dựng theo hướng minh bạch, hợp pháp và thiên về dữ liệu công khai. Nếu bạn cần một trang KQXS chuẩn SEO, có đầy đủ khung nội dung, có bộ lọc rõ ràng và có tính năng thao tác trực tiếp, cấu trúc này sẽ phù hợp.</p>
+          <p><em>Bạn có thể dùng trang này như một bảng tra cứu dữ liệu thống kê, không phải như nội dung khuyến khích cờ bạc. Mục tiêu là thông tin, so sánh và lưu trữ dữ liệu một cách có trách nhiệm.</em></p>
+        </article>
+      `;
+    };
+
+    const defaultKqxsSeoContent = buildKqxsStructuredContent('vi');
+    const defaultKqxsSeoContentEn = buildKqxsStructuredContent('en');
+    const defaultKqxsSeoContentZh = buildKqxsStructuredContent('zh');
 
     const validateKqxsSeoContent = (html) => {
       const text = String(html || '').toLowerCase();
       const requiredTokens = [
-        '<h1',
-        '<h2',
+        '<h3',
+        '<h4',
+        '<ul>',
         'thống kê giải đặc biệt',
         'thống kê kết quả xổ số miền bắc 100 ngày',
         'tần suất lô tô',
@@ -492,6 +625,7 @@ if (typeof window !== 'undefined') {
         text.includes('không hỗ trợ cá cược')
         || text.includes('khong ho tro ca cuoc')
         || text.includes('không khuyến khích hành vi vi phạm pháp luật')
+        || text.includes('không khuyến khích cờ bạc')
       );
 
       return requiredTokens.every((token) => text.includes(token)) && hasLegalGuard;
@@ -610,14 +744,16 @@ if (typeof window !== 'undefined') {
         attributes_keywords_en: 'special prize statistics, weekly special prize analytics, loto frequency, northern lottery 100-day statistics',
         attributes_keywords_zh: '特别奖统计, 周统计, 号码频率, 北部彩票100天统计',
         content: defaultKqxsLandingContent,
+        content_en: defaultKqxsSeoContentEn,
+        content_zh: defaultKqxsSeoContentZh,
       },
       {
-        id: 'cau-noi-kinh-doanh-online',
-        service_code: 'cau-noi-kinh-doanh-online',
-        slug: 'cau-noi-kinh-doanh-online',
-        category: 'Cầu Nối Kinh Doanh Online',
-        category_en: 'Online Business Bridge',
-        category_zh: '在线商业桥梁',
+        id: 'hop-tac-kinh-doanh',
+        service_code: 'hop-tac-kinh-doanh',
+        slug: 'hop-tac-kinh-doanh',
+        category: 'Hợp Tác Kinh Doanh',
+        category_en: 'Business Partnership',
+        category_zh: '商业合作',
         is_service: true,
         is_group_slug: true,
         is_group_slug_default: false,
@@ -625,12 +761,12 @@ if (typeof window !== 'undefined') {
         attributes_icon: 'DatabaseOutlined',
         attributes_color: '#722ed1',
         attributes_priority: 2,
-        attributes_title: 'Cầu nối các lĩnh vực kinh doanh online',
-        attributes_title_en: 'Bridge Across Online Business Verticals',
-        attributes_title_zh: '连接多行业线上业务',
-        attributes_description: 'Kết nối mỹ phẩm, bất động sản, xe dịch vụ và đặt lịch online trên một nền tảng.',
-        attributes_description_en: 'Connect beauty, real estate, transport and booking services on one platform.',
-        attributes_description_zh: '在同一平台连接美妆、房产、用车与在线预约服务。',
+        attributes_title: 'Hợp Tác Kinh Doanh Các Lĩnh Vực Online',
+        attributes_title_en: 'Business Partnership Across Online Verticals',
+        attributes_title_zh: '跨行业线上商业合作',
+        attributes_description: 'Hợp tác kinh doanh mỹ phẩm, bất động sản, xe dịch vụ và đặt lịch online trên một nền tảng.',
+        attributes_description_en: 'Business partnership for beauty, real estate, transport and booking services on one platform.',
+        attributes_description_zh: '在同一平台开展美妆、房产、用车与在线预约服务的商业合作。',
       },
       {
         id: 'bat-dong-san',
@@ -642,7 +778,7 @@ if (typeof window !== 'undefined') {
         is_service: true,
         is_group_slug: false,
         is_group_slug_default: false,
-        group_slug: 'cau-noi-kinh-doanh-online',
+        group_slug: 'hop-tac-kinh-doanh',
         attributes_icon: 'HomeOutlined',
         attributes_color: '#13c2c2',
         attributes_priority: 1,
@@ -657,7 +793,7 @@ if (typeof window !== 'undefined') {
         is_service: true,
         is_group_slug: false,
         is_group_slug_default: false,
-        group_slug: 'cau-noi-kinh-doanh-online',
+        group_slug: 'hop-tac-kinh-doanh',
         attributes_icon: 'SkinOutlined',
         attributes_color: '#eb2f96',
         attributes_priority: 2,
@@ -672,7 +808,7 @@ if (typeof window !== 'undefined') {
         is_service: true,
         is_group_slug: false,
         is_group_slug_default: false,
-        group_slug: 'cau-noi-kinh-doanh-online',
+        group_slug: 'hop-tac-kinh-doanh',
         attributes_icon: 'CarOutlined',
         attributes_color: '#faad14',
         attributes_priority: 3,
@@ -687,7 +823,7 @@ if (typeof window !== 'undefined') {
         is_service: true,
         is_group_slug: false,
         is_group_slug_default: false,
-        group_slug: 'cau-noi-kinh-doanh-online',
+        group_slug: 'hop-tac-kinh-doanh',
         attributes_icon: 'CalendarOutlined',
         attributes_color: '#faad14',
         attributes_priority: 4,
@@ -702,7 +838,7 @@ if (typeof window !== 'undefined') {
         is_service: true,
         is_group_slug: false,
         is_group_slug_default: false,
-        group_slug: 'cau-noi-kinh-doanh-online',
+        group_slug: 'hop-tac-kinh-doanh',
         attributes_icon: 'CodeOutlined',
         attributes_color: '#1677ff',
         attributes_priority: 5,
@@ -720,8 +856,8 @@ if (typeof window !== 'undefined') {
       excerpt_en: 'Track weekly and sum-based special prize analytics, loto frequency and 100-day northern lottery data.',
       excerpt_zh: '查询特别奖周统计、总值统计、号码频率与北部100天彩票数据。',
       content: defaultKqxsLandingContent,
-      content_en: String(options.kqxsContentEn || ''),
-      content_zh: String(options.kqxsContentZh || ''),
+      content_en: String(options.kqxsContentEn || defaultKqxsSeoContentEn),
+      content_zh: String(options.kqxsContentZh || defaultKqxsSeoContentZh),
       attributes_title: 'Hệ thống thống kê giải đặc biệt và dữ liệu kết quả xổ số 3 miền',
       attributes_title_en: 'Special Prize Statistics and 3-Region Lottery Data Platform',
       attributes_title_zh: '三地区特别奖统计与彩票数据平台',
@@ -775,8 +911,8 @@ if (typeof window !== 'undefined') {
       attributes_description_en: String(options.homepageSeoDescriptionEn || 'Homepage aggregating service information and data from PDF sources.'),
       attributes_description_zh: String(options.homepageSeoDescriptionZh || '汇总服务信息与 PDF 数据来源的首页。'),
       attributes_keywords: String(options.homepageSeoKeywords || 'trang chủ thống kê xổ số, thống kê giải đặc biệt, thống kê kết quả xổ số miền bắc 100 ngày, tần suất lô tô, thống kê miền bắc'),
-      attributes_keywords_en: String(options.homepageSeoKeywordsEn || 'homepage, software, online business bridge, lottery statistics'),
-      attributes_keywords_zh: String(options.homepageSeoKeywordsZh || '首页, 软件, 在线商业桥梁, 彩票统计'),
+      attributes_keywords_en: String(options.homepageSeoKeywordsEn || 'homepage, software, partnership, lottery statistics'),
+      attributes_keywords_zh: String(options.homepageSeoKeywordsZh || '首页, 软件, 合作, 彩票统计'),
       tags: JSON.stringify(['homepage', 'pdf', 'landing']),
       featured: 1,
       active_home: 1,
@@ -833,14 +969,14 @@ if (typeof window !== 'undefined') {
               pk_fields: ['slug'],
               obj_update: {
                 slug,
-                group_slug: 'cau-noi-kinh-doanh-online',
+                group_slug: 'hop-tac-kinh-doanh',
                 domain: row?.domain || domain,
                 status: row?.status || 'active',
                 updated_at: now,
               },
             });
             stats.migrated += 1;
-            console.log(`[MIGRATE] web_services/${slug}: dich-vu -> cau-noi-kinh-doanh-online`);
+            console.log(`[MIGRATE] web_services/${slug}: dich-vu -> hop-tac-kinh-doanh`);
           } catch (err) {
             stats.fail += 1;
             stats.failDetails.push({ obj: 'web_services', slug, error: String(err?.message || err) });

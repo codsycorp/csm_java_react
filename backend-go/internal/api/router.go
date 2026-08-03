@@ -16,7 +16,7 @@ import (
 func CatchAll(st *state.AppState) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		uri := r.URL.Path
-		host := extractHost(r.Header)
+		host := extractHost(r)
 		query := r.URL.RawQuery
 
 		if r.Method == http.MethodPost && (uri == "/upload" || uri == "/upload.shtml" || uri == "/api/upload") {
@@ -228,7 +228,7 @@ func ParseRequestParams(r *http.Request) map[string]any {
 	params["_client_ip"] = security.ClientIPFromHeaders(r.Header)
 	params["_user_agent"] = security.UserAgentFromHeaders(r.Header)
 	params["_client_id"] = security.ClientIDFromHeaders(r.Header)
-	params["_host"] = extractHost(r.Header)
+	params["_host"] = extractHost(r)
 	params["_origin"] = r.Header.Get("Origin")
 	params["_referer"] = r.Header.Get("Referer")
 	params["refreshTokenHeader"] = r.Header.Get("X-Refresh-Token")
@@ -270,9 +270,16 @@ func MonitoringHealth() *model.StandardResponse {
 	return r
 }
 
-func extractHost(h http.Header) string {
+func extractHost(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	h := r.Header
 	if xf := h.Get("X-Forwarded-Host"); xf != "" {
 		return strings.ToLower(xf)
+	}
+	if host := strings.TrimSpace(r.Host); host != "" {
+		return strings.ToLower(host)
 	}
 	if host := h.Get("Host"); host != "" {
 		return strings.ToLower(host)

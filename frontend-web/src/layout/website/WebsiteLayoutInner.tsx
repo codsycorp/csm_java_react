@@ -3,6 +3,8 @@ import React, { ReactNode, useState, useEffect, useRef, useMemo, useCallback } f
 import { theme, ConfigProvider, Menu, Drawer, Space, Button, Modal, Input } from "antd";
 import styles from "./websiteLayout.module.css";
 import WebsiteFooter from "./WebsiteFooter";
+import { Link } from "react-router";
+import { useLocation } from "react-router";
 import { useTranslation } from "react-i18next";
 import { usePreferencesStore, useAuthStore } from "#src/store";
 import { useUserStore } from "#src/store/user";
@@ -31,6 +33,68 @@ interface WebsiteLayoutProps {
 }
 
 export default function WebsiteLayoutInner({ children, selectedKey, menuItems, title, breadcrumb }: WebsiteLayoutProps) {
+    const location = useLocation();
+  const BRIDGE_CONTEXT_STORAGE_KEY = 'csm_bridge_context';
+
+    const bridgeContextPaths = useMemo(() => {
+      const paths = new Set<string>();
+      const bridgeMenu = (menuItems || []).find((item) => item.key === '/hop-tac-kinh-doanh');
+      const normalizePath = (rawPath?: string) => {
+        const value = String(rawPath || '').trim();
+        if (!value) return '';
+        const pathname = value.split('?')[0].replace(/\/+$/, '');
+        return pathname || '/';
+      };
+
+      const parentPath = normalizePath(bridgeMenu?.path || bridgeMenu?.key);
+      if (parentPath) {
+        paths.add(parentPath);
+      }
+
+      (bridgeMenu?.children || []).forEach((child) => {
+        const childPath = normalizePath(child?.path || child?.key);
+        if (childPath) {
+          paths.add(childPath);
+        }
+      });
+
+      return paths;
+    }, [menuItems]);
+
+    const isBridgeContext = useMemo(() => {
+      const normalizedPath = (location.pathname || '').replace(/\/+$/, '') || '/';
+      const isBridgeLanding = normalizedPath === '/hop-tac-kinh-doanh';
+      if (isBridgeLanding) {
+        return true;
+      }
+
+      if (!bridgeContextPaths.has(normalizedPath)) {
+        return false;
+      }
+
+      try {
+        return window.sessionStorage.getItem(BRIDGE_CONTEXT_STORAGE_KEY) === '1';
+      } catch {
+        return false;
+      }
+    }, [location.pathname, bridgeContextPaths]);
+
+    const effectiveMenuItems = useMemo(() => menuItems, [menuItems]);
+
+    const updateBridgeContextByPath = useCallback((rawPath?: string) => {
+      if (typeof window === 'undefined') return;
+      try {
+        const normalized = String(rawPath || '').split('?')[0].replace(/\/+$/, '') || '/';
+        if (bridgeContextPaths.has(normalized)) {
+          window.sessionStorage.setItem(BRIDGE_CONTEXT_STORAGE_KEY, '1');
+          return;
+        }
+        window.sessionStorage.removeItem(BRIDGE_CONTEXT_STORAGE_KEY);
+      } catch {
+        // ignore storage failures
+      }
+    }, [bridgeContextPaths]);
+
   const AUTO_OPEN_COOLDOWN_MS = 30_000;
   const GUEST_AUTO_OPEN_EVENT_TYPES = new Set(['ai_auto_welcome', 'ai_auto_welcome_fallback']);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -287,7 +351,7 @@ export default function WebsiteLayoutInner({ children, selectedKey, menuItems, t
     let parentKey: string | undefined;
     let childKey: string | undefined;
     
-    menuItems?.forEach(item => {
+    effectiveMenuItems?.forEach(item => {
       if (item.children) {
         const foundChild = item.children.find(child => child.key === selectedKey);
         if (foundChild) {
@@ -328,28 +392,28 @@ export default function WebsiteLayoutInner({ children, selectedKey, menuItems, t
     },
   };
 
-  const menuItemsForMenu = menuItems?.map(item => ({
+  const menuItemsForMenu = effectiveMenuItems?.map(item => ({
     key: item.key,
     icon: item.icon ? React.cloneElement(item.icon as React.ReactElement, { fill: "currentColor", color: "currentColor" }) : undefined,
     label: item.path ? (
-      <a
-        href={item.path}
+      <Link
+        to={item.path}
+        onClick={() => updateBridgeContextByPath(item.path || item.key)}
         className={item.key === selectedKey ? `${styles.wuMenuLink} ${styles.wuMenuLinkActive}` : styles.wuMenuLink}
-        style={{ cursor: 'pointer' }}
       >
         {item.label}
-      </a>
+      </Link>
     ) : item.label,
     children: item.children?.map(child => ({
       key: child.key,
       label: child.path ? (
-        <a
-          href={child.path}
+        <Link
+          to={child.path}
+          onClick={() => updateBridgeContextByPath(child.path || child.key)}
           className={child.key === selectedKey ? `${styles.wuMenuLink} ${styles.wuMenuLinkActive}` : styles.wuMenuLink}
-          style={{ cursor: 'pointer' }}
         >
           {child.label}
-        </a>
+        </Link>
       ) : child.label
     }))
   }));
@@ -371,7 +435,7 @@ export default function WebsiteLayoutInner({ children, selectedKey, menuItems, t
               isMobile={isMobile} 
               onMobileMenuClick={() => setDrawerOpen(true)}
             >
-              {menuItems && (
+              {effectiveMenuItems && (
                 <Menu
                   mode="horizontal"
                   items={menuItemsForMenu}
@@ -400,7 +464,7 @@ export default function WebsiteLayoutInner({ children, selectedKey, menuItems, t
               open={drawerOpen}
               className={styles.mobileDrawer}
             >
-              {menuItems && (
+              {effectiveMenuItems && (
                 <Menu
                   mode="vertical"
                   items={menuItemsForMenu}

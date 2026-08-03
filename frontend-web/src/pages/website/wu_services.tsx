@@ -175,6 +175,11 @@ const translatePropertyType = (key: string, t: any): string => {
 
 const { Title, Paragraph, Text } = Typography;
 
+const SPECIAL_MENU_SLUGS = new Set([
+  'thong-ke-ket-qua-xo-so',
+  'hop-tac-kinh-doanh',
+]);
+
 export interface ServiceCategory {
   key: string;
   title: string;
@@ -184,6 +189,54 @@ export interface ServiceCategory {
   content?: string;
   dynamicCodeName?: string;
 }
+
+const DEFAULT_KQXS_LANDING_CONTENT: Record<'vi' | 'en' | 'zh', string> = {
+  vi: `
+    <article>
+      <h3>Thống Kê Kết Quả Xổ Số 3 Miền Theo Dữ Liệu Minh Bạch</h3>
+      <p>Trang này tập trung vào thống kê công khai: giải đặc biệt theo tuần và theo tổng, tần suất lô tô, chu kỳ 100 ngày và so sánh dữ liệu theo từng miền.</p>
+      <h4>1. Thống kê giải đặc biệt đa chiều</h4>
+      <p>Người dùng có thể xem dữ liệu theo tuần, theo tổng, theo ngày và theo đài để theo dõi xu hướng thay đổi theo thời gian.</p>
+      <h4>2. Tần suất lô tô và khoảng trễ</h4>
+      <p>Hệ thống hỗ trợ thống kê tần suất xuất hiện và khoảng trễ để phục vụ mục đích tham khảo dữ liệu, không phải dự đoán cá cược.</p>
+      <h4>3. Bộ lọc theo ngày, miền, đài</h4>
+      <p>Có thể lọc theo ngày, thứ, miền và đài để truy xuất nhanh đúng lát cắt dữ liệu cần xem.</p>
+      <div style="background:#eff6ff;border-left:4px solid #2563eb;padding:14px;margin:16px 0;">
+        <strong>Tuyên bố pháp lý:</strong> Nội dung chỉ phục vụ tham khảo thống kê dữ liệu, không hỗ trợ cá cược và không khuyến khích hành vi vi phạm pháp luật.
+      </div>
+    </article>
+  `,
+  en: `
+    <article>
+      <h3>Three-Region Lottery Statistics With Transparent Data</h3>
+      <p>This page focuses on public statistics: special-prize weekly/sum grouping, loto frequency, 100-day cycles, and cross-region comparisons.</p>
+      <h4>1. Multi-angle special-prize analytics</h4>
+      <p>Review data by week, by sum, by day, and by station to observe trend changes over time.</p>
+      <h4>2. Loto frequency and gap intervals</h4>
+      <p>The system highlights appearance frequency and gap intervals for data reference, not betting predictions.</p>
+      <h4>3. Filters by date, region, and station</h4>
+      <p>Use filters to quickly narrow down the exact data slice you need.</p>
+      <div style="background:#eff6ff;border-left:4px solid #2563eb;padding:14px;margin:16px 0;">
+        <strong>Legal note:</strong> This content is for statistical reference only and does not support gambling or illegal activity.
+      </div>
+    </article>
+  `,
+  zh: `
+    <article>
+      <h3>三地区彩票开奖数据统计（透明数据）</h3>
+      <p>本页面聚焦公开统计：特别奖按周/按总和、号码频率、100天周期，以及跨地区对比。</p>
+      <h4>1. 特别奖多维统计</h4>
+      <p>可按星期、总和、日期、站点查看数据趋势变化。</p>
+      <h4>2. 号码频率与遗漏间隔</h4>
+      <p>系统展示出现频率与间隔，仅用于数据参考，不用于博彩预测。</p>
+      <h4>3. 日期/地区/站点筛选</h4>
+      <p>通过筛选快速定位你需要的数据切片。</p>
+      <div style="background:#eff6ff;border-left:4px solid #2563eb;padding:14px;margin:16px 0;">
+        <strong>法律声明：</strong> 本内容仅供统计参考，不支持赌博或任何违法行为。
+      </div>
+    </article>
+  `,
+};
 
 import { extractLangAndSlug } from "../../utils/lang-slug";
 import { slugify, normalizeServiceDetail } from "../../utils/normalize";
@@ -492,6 +545,7 @@ const WuServicesPage: React.FC = () => {
   const [searchSubmitted, setSearchSubmitted] = useState<Record<string, boolean>>({});
   const [searchUsedServer, setSearchUsedServer] = useState<Record<string, boolean>>({});
   const [advancedOpen, setAdvancedOpen] = useState<Record<string, boolean>>({});
+  const [fallbackInitialData, setFallbackInitialData] = useState<any | null>(null);
   const [isMobile, setIsMobile] = useState(false);
   useEffect(() => {
     const checkMobile = () => {
@@ -507,6 +561,95 @@ const WuServicesPage: React.FC = () => {
   const initializedSearchFromUrl = useRef<Record<string, boolean>>({});
   // Cache last applied search string per category so reload/back/forward rehydrates form values reliably
   const searchQueryCache = useRef<Record<string, string>>({});
+  const BRIDGE_DEFAULT_CATEGORY = 'phan-mem';
+  const BRIDGE_CONTEXT_STORAGE_KEY = 'csm_bridge_context';
+
+  const initialReactData = useMemo(() => {
+    const w: any = typeof window !== 'undefined' ? window : undefined;
+    return (w && (w.__INITIAL_REACT_DATA__ || w.initialReactData)) || fallbackInitialData || null;
+  }, [fallbackInitialData]);
+
+  const resolveBackendSSRBaseUrl = () => {
+    if (typeof window === 'undefined') return '';
+    const host = window.location.hostname;
+    const port = window.location.port;
+    if ((host === 'localhost' || host === '127.0.0.1') && (port === '3333' || port === '5173')) {
+      return 'http://localhost:9999';
+    }
+    return window.location.origin;
+  };
+
+  const extractInitialDataFromHtml = (html: string): any | null => {
+    if (!html || typeof html !== 'string') return null;
+    const marker = 'window.__INITIAL_REACT_DATA__=';
+    const start = html.indexOf(marker);
+    if (start < 0) return null;
+
+    const from = start + marker.length;
+    const scriptEnd = html.indexOf('</script>', from);
+    if (scriptEnd < 0) return null;
+    const segment = html.slice(from, scriptEnd);
+    const semicolonPos = segment.lastIndexOf(';');
+    const raw = (semicolonPos >= 0 ? segment.slice(0, semicolonPos) : segment).trim();
+    if (!raw) return null;
+
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  };
+
+  const fetchSSRInitialDataByPath = useCallback(async (pathname: string, rawSearch = ''): Promise<any | null> => {
+    try {
+      const base = resolveBackendSSRBaseUrl();
+      if (!base) return null;
+      const url = new URL(`${base}${pathname}${rawSearch || ''}`);
+      if (base.includes('localhost:9999')) {
+        url.searchParams.set('__host', window.location.host || 'localhost:3333');
+      }
+      const resp = await fetch(url.toString(), {
+        method: 'GET',
+        credentials: 'include',
+        headers: { Accept: 'text/html,application/xhtml+xml' },
+      });
+      if (!resp.ok) return null;
+      const html = await resp.text();
+      return extractInitialDataFromHtml(html);
+    } catch {
+      return null;
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const w: any = typeof window !== 'undefined' ? window : undefined;
+    const hasInlineData = Boolean(w && (w.__INITIAL_REACT_DATA__ || w.initialReactData));
+    if (hasInlineData) {
+      if (fallbackInitialData !== null) {
+        setFallbackInitialData(null);
+      }
+      return;
+    }
+
+    const loadSSRDataFromBackend = async () => {
+      try {
+        const parsed = await fetchSSRInitialDataByPath(window.location.pathname, window.location.search || '');
+        if (!cancelled && parsed && typeof parsed === 'object') {
+          setFallbackInitialData(parsed);
+        }
+      } catch {
+        // Keep UI resilient with existing category/content fallback.
+      }
+    };
+
+    void loadSSRDataFromBackend();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [location.pathname, location.search, fallbackInitialData, fetchSSRInitialDataByPath]);
 
   // Per-user session id to keep pagination & search stable
   const getSessionId = () => {
@@ -822,36 +965,95 @@ const WuServicesPage: React.FC = () => {
       color: "#1890ff",
       icon: "CodeOutlined",
       description: "Giải pháp phần mềm, ứng dụng quản lý, tự động hóa, ERP, CRM, ...",
+      description_en: "Software solutions, management applications, automation, ERP, CRM, ...",
+      description_zh: "软件解决方案、管理应用、自动化、ERP、CRM 等。",
       category: "Phần Mềm",
-      slug: "phan-mem"
+      category_en: "Software",
+      category_zh: "软件",
+      slug: "phan-mem",
+      group_slug: "root",
+      is_group_slug: false,
     },
     {
       color: "#13c2c2",
       icon: "EnvironmentOutlined",
       description: "Tin tức, dự án, mua bán, cho thuê nhà đất, căn hộ, biệt thự, ...",
+      description_en: "News, projects, buying, selling and renting land, apartments and villas, ...",
+      description_zh: "房产资讯、项目，以及土地、公寓、别墅买卖与租赁信息。",
       category: "Bất Động Sản",
-      slug: "bat-dong-san"
+      category_en: "Real Estate",
+      category_zh: "房地产",
+      slug: "bat-dong-san",
+      group_slug: "root",
+      is_group_slug: false,
     },
     {
       color: "#eb2f96",
       icon: "StarOutlined",
       description: "Sản phẩm làm đẹp, spa, thẩm mỹ viện, thương hiệu mỹ phẩm, ...",
+      description_en: "Beauty products, spa services, cosmetic clinics and beauty brands, ...",
+      description_zh: "美容产品、水疗、医美机构与美妆品牌等内容。",
       category: "Mỹ Phẩm & Làm Đẹp",
-      slug: "lam-dep-my-pham"
+      category_en: "Beauty & Cosmetics",
+      category_zh: "美容与化妆品",
+      slug: "lam-dep-my-pham",
+      group_slug: "root",
+      is_group_slug: false,
     },
     {
       color: "#1890ff",
       icon: "CarOutlined",
       description: "Dịch vụ thuê xe tự lái, có lái, xe du lịch, xe cưới hỏi, ...",
+      description_en: "Self-drive and chauffeured car rental, tourism cars and wedding transport, ...",
+      description_zh: "自驾与带司机租车、旅游用车、婚庆用车等服务。",
       category: "Cho Thuê Xe 4-7 Chỗ",
-      slug: "cho-thue-xe"
+      category_en: "Car Rental (4-7 Seats)",
+      category_zh: "4-7座租车服务",
+      slug: "cho-thue-xe",
+      group_slug: "root",
+      is_group_slug: false,
     },
     {
       color: "#faad14",
       icon: "CalendarOutlined",
       description: "Đặt lịch khám bệnh, làm đẹp, sự kiện, dịch vụ tiện ích, ...",
+      description_en: "Booking for medical visits, beauty services, events and other convenience services, ...",
+      description_zh: "预约就医、美容、活动及各类生活服务。",
       category: "Đặt Lịch Online",
-      slug: "booking-online"
+      category_en: "Online Booking",
+      category_zh: "在线预约",
+      slug: "booking-online",
+      group_slug: "root",
+      is_group_slug: false,
+    },
+    {
+      color: "#722ed1",
+      icon: "CalendarOutlined",
+      description: "Thống kê và tổng hợp dữ liệu kết quả xổ số theo ngày, đài và miền.",
+      description_en: "Statistics and aggregation of lottery results by day, station and region.",
+      description_zh: "按日期、站点与区域汇总彩票开奖结果统计。",
+      content: DEFAULT_KQXS_LANDING_CONTENT.vi,
+      content_en: DEFAULT_KQXS_LANDING_CONTENT.en,
+      content_zh: DEFAULT_KQXS_LANDING_CONTENT.zh,
+      category: "Thống Kê Kết Quả Xổ Số",
+      category_en: "Lottery Statistics",
+      category_zh: "彩票统计",
+      slug: "thong-ke-ket-qua-xo-so",
+      group_slug: "root",
+      is_group_slug: false,
+    },
+    {
+      color: "#13c2c2",
+      icon: "EnvironmentOutlined",
+      description: "Hợp tác kinh doanh các lĩnh vực online trên cùng nền tảng.",
+      description_en: "Business partnership across online service verticals on one shared platform.",
+      description_zh: "在同一平台开展多行业线上商业合作。",
+      category: "Hợp Tác Kinh Doanh",
+      category_en: "Business Partnership",
+      category_zh: "商业合作",
+      slug: "hop-tac-kinh-doanh",
+      group_slug: "root",
+      is_group_slug: false,
     }
   ];
   // SSR categories injected from backend
@@ -860,12 +1062,17 @@ const WuServicesPage: React.FC = () => {
   function isSSRCategory(cat: any): cat is { color: string; icon: string; description: string; category: string; slug: string; group_slug: string; is_group_slug: boolean } {
     return cat && typeof cat === 'object' && 'color' in cat && 'icon' in cat && 'description' in cat && 'category' in cat && 'slug' in cat && 'group_slug' in cat && typeof cat.group_slug === 'string' && 'is_group_slug' in cat && typeof cat.is_group_slug === 'boolean';
   }
-  const validCategories = (ssrCategories.length > 0 ? ssrCategories : defaultCategories)
-    .filter(cat => typeof cat === 'object' && isSSRCategory(cat) && cat.group_slug !== '' && cat.is_group_slug === false);
+  const pickServiceCategories = (cats: any[]) =>
+    cats.filter(cat => typeof cat === 'object' && isSSRCategory(cat) && cat.group_slug !== '' && cat.is_group_slug === false);
+
+  const ssrServiceCategories = pickServiceCategories(ssrCategories);
+  const validCategories = ssrServiceCategories.length > 0
+    ? ssrServiceCategories
+    : pickServiceCategories(defaultCategories as any[]);
   
   // SSR current service category meta injected via initialReactData (for the current route)
-  const ssrServiceCategory = (typeof window !== 'undefined' && (window as any).__INITIAL_REACT_DATA__ && (window as any).__INITIAL_REACT_DATA__.serviceCategory)
-    ? (window as any).__INITIAL_REACT_DATA__.serviceCategory
+  const ssrServiceCategory = (initialReactData && initialReactData.serviceCategory)
+    ? initialReactData.serviceCategory
     : undefined;
 
   // FIXED: Build allCategories with language-aware title selection using useMemo (like wu_menu.tsx)
@@ -901,8 +1108,21 @@ const WuServicesPage: React.FC = () => {
         // Default to Vietnamese
         categoryDescription = typeof cat !== 'string' ? cat.description : '';
       }
-      // Backend returns content for current language only in 'content' field
-      const content = typeof cat !== 'string' ? cat.content : '';
+      // Prefer language-specific content when available; fallback to base content.
+      let content = '';
+      if (typeof cat !== 'string') {
+        if (currentLang.includes('en')) {
+          content = ((cat as any).content_en && String((cat as any).content_en).trim())
+            ? (cat as any).content_en
+            : ((cat as any).content || '');
+        } else if (currentLang.includes('zh')) {
+          content = ((cat as any).content_zh && String((cat as any).content_zh).trim())
+            ? (cat as any).content_zh
+            : ((cat as any).content || '');
+        } else {
+          content = (cat as any).content || '';
+        }
+      }
       return {
         key: typeof cat !== 'string' ? cat.slug : '',
         title: categoryTitle,
@@ -953,7 +1173,18 @@ const WuServicesPage: React.FC = () => {
           description = ssrServiceCategory.description || '';
         }
         
-        const content = ssrServiceCategory.content || '';
+        let content = '';
+        if (currentLang.includes('en')) {
+          content = ((ssrServiceCategory as any).content_en && String((ssrServiceCategory as any).content_en).trim())
+            ? (ssrServiceCategory as any).content_en
+            : ((ssrServiceCategory as any).content || '');
+        } else if (currentLang.includes('zh')) {
+          content = ((ssrServiceCategory as any).content_zh && String((ssrServiceCategory as any).content_zh).trim())
+            ? (ssrServiceCategory as any).content_zh
+            : ((ssrServiceCategory as any).content || '');
+        } else {
+          content = (ssrServiceCategory as any).content || '';
+        }
         const dynamicCodeName = '';
         const dynamicCode = '';
         
@@ -972,6 +1203,43 @@ const WuServicesPage: React.FC = () => {
     // Fallback to existing allCategories (built from SSR categories list, already language-aware)
     const found = allCategories.find(c => c.key === categoryKey);
     return found || { key: categoryKey, title: '', description: '', content: '', color: '#13c2c2', icon: <CodeOutlined /> } as ServiceCategory;
+  };
+
+  const resolveLangCode = (rawLang: string): 'vi' | 'en' | 'zh' => {
+    const lower = String(rawLang || '').toLowerCase();
+    if (lower.includes('en')) return 'en';
+    if (lower.includes('zh')) return 'zh';
+    return 'vi';
+  };
+
+  // Ensure landing content is always visible:
+  // 1) SSR serviceCategory.content
+  // 2) Landing article from serviceDetailList (post content)
+  // 3) Built-in default template for critical pages (KQXS)
+  const resolveCategoryLandingContent = (categoryKey: string): string => {
+    const fromMeta = String(getHeaderMeta(categoryKey)?.content || '').trim();
+    if (fromMeta) return fromMeta;
+
+    const langCode = resolveLangCode(i18n.language || 'vi');
+    const categoryPosts = getPostsByServiceType(categoryKey);
+    const preferredSlug = categoryKey === 'thong-ke-ket-qua-xo-so'
+      ? 'thong-ke-giai-dac-biet-du-lieu-kqxs'
+      : '';
+
+    const landingPost = categoryPosts.find((post) => String(post?.slug || '').trim() === preferredSlug)
+      || categoryPosts.find((post) => Boolean((post as any).featured))
+      || categoryPosts.find((post) => String(post?.content || '').trim().length > 0);
+
+    const fromPost = landingPost
+      ? String(getMultilingualField(landingPost, 'content', langCode) || landingPost.content || '').trim()
+      : '';
+    if (fromPost) return fromPost;
+
+    if (categoryKey === 'thong-ke-ket-qua-xo-so') {
+      return DEFAULT_KQXS_LANDING_CONTENT[langCode];
+    }
+
+    return '';
   };
 
   // Định nghĩa các trường tìm kiếm đặc thù cho từng lĩnh vực, dùng đa ngôn ngữ
@@ -1233,7 +1501,64 @@ const WuServicesPage: React.FC = () => {
   // Lấy lang và slug từ URL
   // Lấy ngôn ngữ hiện tại từ i18n hoặc URL, fallback 'vi'
   const currentLang = i18nInstance.language && i18nInstance.language !== 'cimode' ? i18nInstance.language : 'vi';
+  const currentLangCode = String(currentLang || 'vi').split('-')[0].slice(0, 2).toLowerCase();
+  const nonDefaultLangCode = currentLangCode && currentLangCode !== 'vi' ? currentLangCode : '';
   const { lang, slug } = extractLangAndSlug(location.pathname);
+  const bridgeChildSlugSet = useMemo(() => {
+    const slugs = new Set<string>([
+      'phan-mem',
+      'bat-dong-san',
+      'lam-dep-my-pham',
+      'cho-thue-xe',
+      'booking-online',
+    ]);
+
+    const bridgeMenu = (menuItems || []).find((item) => item.key === '/hop-tac-kinh-doanh');
+    (bridgeMenu?.children || []).forEach((child) => {
+      const childPath = String(child?.path || child?.key || '').split('?')[0].replace(/^\/+/, '').trim();
+      if (childPath) {
+        slugs.add(childPath);
+      }
+    });
+
+    return slugs;
+  }, [menuItems]);
+  const isLotteryLandingRoute = slug === 'thong-ke-ket-qua-xo-so';
+  const isBridgeLandingRoute = slug === 'hop-tac-kinh-doanh';
+  const isBridgeChildRoute = Boolean(slug && bridgeChildSlugSet.has(slug));
+  const isBridgeContextStored = useMemo(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      return window.sessionStorage.getItem(BRIDGE_CONTEXT_STORAGE_KEY) === '1';
+    } catch {
+      return false;
+    }
+  }, [location.pathname]);
+  const isBridgeContext = isBridgeLandingRoute || (isBridgeChildRoute && isBridgeContextStored);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      if (isBridgeLandingRoute || isBridgeChildRoute) {
+        window.sessionStorage.setItem(BRIDGE_CONTEXT_STORAGE_KEY, '1');
+        return;
+      }
+      if (slug) {
+        window.sessionStorage.removeItem(BRIDGE_CONTEXT_STORAGE_KEY);
+      }
+    } catch {
+      // ignore storage failures
+    }
+  }, [isBridgeLandingRoute, isBridgeChildRoute, slug]);
+
+  const visibleCategories = useMemo(() => {
+    if (!isBridgeContext) {
+      return allCategories;
+    }
+    return allCategories.filter(
+      (cat) => cat.key !== 'thong-ke-ket-qua-xo-so' && cat.key !== 'hop-tac-kinh-doanh',
+    );
+  }, [allCategories, isBridgeContext]);
 
   // Check if we're on a group route (e.g., /du-an accessed directly)
   // ssrCategories already declared at component scope level (line 647)
@@ -1241,7 +1566,7 @@ const WuServicesPage: React.FC = () => {
   
   // Kiểm tra slug có hợp lệ không (không phải group route thì phải là valid category slug)
   useEffect(() => {
-    if (slug && !isGroupRoute && !allCategories.some(c => c.key === slug)) {
+    if (slug && !isGroupRoute && !allCategories.some(c => c.key === slug) && !SPECIAL_MENU_SLUGS.has(slug)) {
       console.warn(`❌ Invalid category slug: ${slug}, redirecting to home`);
       navigate("/", { replace: true });
     }
@@ -1250,6 +1575,9 @@ const WuServicesPage: React.FC = () => {
   // If on a group route, redirect to default service route
   useEffect(() => {
     if (isGroupRoute && allCategories.length > 0) {
+      if (slug === 'hop-tac-kinh-doanh') {
+        return;
+      }
       const defaultServiceSlug = allCategories[0].key;
       const targetUrl = `/${defaultServiceSlug}`;
       if (window.location.pathname === targetUrl) {
@@ -1262,17 +1590,54 @@ const WuServicesPage: React.FC = () => {
   
   // Lấy key lĩnh vực từ slug hoặc fallback
   function getCategoryKeyFromUrl() {
-    if (slug && allCategories.some(c => c.key === slug)) {
+    if (slug && visibleCategories.some(c => c.key === slug)) {
       return slug;
     }
-    if (allCategories.some(c => c.key === DEFAULT_CATEGORY)) {
+    if (isBridgeLandingRoute && visibleCategories.some(c => c.key === BRIDGE_DEFAULT_CATEGORY)) {
+      return BRIDGE_DEFAULT_CATEGORY;
+    }
+    if (visibleCategories.some(c => c.key === DEFAULT_CATEGORY)) {
       return DEFAULT_CATEGORY;
     }
-    if (allCategories.length > 0 && allCategories[0].key) {
-      return allCategories[0].key;
+    if (visibleCategories.length > 0 && visibleCategories[0].key) {
+      return visibleCategories[0].key;
     }
     return '';
   }
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const tryLoadActiveCategoryData = async () => {
+      if (loading || !activeTabKey || services.length > 0 || isLotteryLandingRoute) return;
+
+      const langCode = nonDefaultLangCode;
+      const search = langCode ? `?hl=${langCode}` : '';
+      const data = await fetchSSRInitialDataByPath(`/${activeTabKey}`, search);
+      if (cancelled || !data || !Array.isArray(data.serviceDetailList) || data.serviceDetailList.length === 0) {
+        return;
+      }
+
+      const normalized = data.serviceDetailList.map((r: any) => normalizeServiceDetail(r)) as ServicePost[];
+      setServices(normalized);
+      setTotal(Number(data.totalCount) || normalized.length);
+      setPagination(prev => ({ ...prev, [activeTabKey]: Number(data.page) || 1 }));
+      setSearchUsedServer(prev => ({ ...prev, [activeTabKey]: true }));
+    };
+
+    void tryLoadActiveCategoryData();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    loading,
+    activeTabKey,
+    services.length,
+    isLotteryLandingRoute,
+    currentLang,
+    fetchSSRInitialDataByPath,
+  ]);
 
   // Initialize activeTabKey based on URL slug and available categories
   useEffect(() => {
@@ -1280,16 +1645,18 @@ const WuServicesPage: React.FC = () => {
     if (targetKey && targetKey !== activeTabKey) {
       setActiveTabKey(targetKey);
     }
-  }, [slug, allCategories, activeTabKey]);
+  }, [slug, visibleCategories, activeTabKey]);
 
   // Khi đổi tab: reload trang với URL mới, SSR sẽ xử lý
   const handleTabChange = (key: string) => {
     if (key !== activeTabKey) {
-      let url = `/${key}`;
-      const langCode = (currentLang && currentLang !== 'vi') ? currentLang.split('-')[0].slice(0, 2) : '';
-      if (langCode && langCode !== 'vi') {
-        url += `?hl=${langCode}`;
+      const params = new URLSearchParams();
+      const langCode = nonDefaultLangCode;
+      if (langCode) {
+        params.set('hl', langCode);
       }
+      const query = params.toString();
+      const url = query ? `/${key}?${query}` : `/${key}`;
       window.location.href = url;
     }
   }
@@ -1343,7 +1710,7 @@ const WuServicesPage: React.FC = () => {
 
     const obj: Record<string, string> = {};
     params.forEach((v, k) => {
-      if (k === "page" || k === "pageSize" || k === "lastkey" || k === "take") return; // handled separately
+      if (k === "page" || k === "pageSize" || k === "lastkey" || k === "take" || k === "hl") return; // handled separately
       obj[k] = v;
     });
 
@@ -1385,15 +1752,9 @@ const WuServicesPage: React.FC = () => {
   function renderSearchBox(category: ServiceCategory) {
     const fields = searchFields[category.key] || [{ key: "q", label: t('website.search.keyword', 'Từ khóa') }];
     const values = searchValues[category.key] || {};
-    const [form] = Form.useForm();
     const isAdvancedOpen = !!advancedOpen[category.key];
     const primaryField = fields.find(f => f.key === 'q') || fields[0];
     const advancedFields = fields.filter(f => f.key !== (primaryField?.key || 'q'));
-    
-    // ✅ Sync form fields với searchValues mỗi khi values thay đổi
-    React.useEffect(() => {
-      form.setFieldsValue(values);
-    }, [form, values]);
     
     const handleSearchSubmit = (formValues: any) => {
       // ✅ Use form values instead of state to ensure accuracy
@@ -1453,7 +1814,6 @@ const WuServicesPage: React.FC = () => {
     
     return (
       <Form
-        form={form}
         key={category.key + '-' + JSON.stringify(values)}
         layout="vertical"
         onFinish={handleSearchSubmit}
@@ -2494,7 +2854,7 @@ const WuServicesPage: React.FC = () => {
   };
 
   // Create tab items with category key and rendered content, add SEO/semantic heading per tab
-  const tabItems = allCategories.map(category => ({
+  const tabItems = visibleCategories.map(category => ({
     key: category.key,
     label: (
       <span style={{ display: 'none' }}>{(getHeaderMeta(category.key).title) || category.title}</span>
@@ -2507,7 +2867,7 @@ const WuServicesPage: React.FC = () => {
             const color = meta.color || category.color;
             const title = meta.title || category.title;
             const desc = meta.description || category.description;
-            const content = meta.content || '';
+            const content = resolveCategoryLandingContent(category.key);
             
             return <>
               <h1 id={`tab-title-${category.key}`} style={{ fontSize: 28, fontWeight: 800, color, margin: 0, letterSpacing: 0.2, textShadow: `0 2px 8px ${color}22` }}>
@@ -2550,8 +2910,7 @@ const WuServicesPage: React.FC = () => {
 
     // Lấy dữ liệu SSR - backend đã xử lý phân trang qua query params
     try {
-      const w: any = typeof window !== 'undefined' ? window : undefined;
-      const initialData = w && (w.__INITIAL_REACT_DATA__ || w.initialReactData);
+      const initialData = initialReactData;
       
       // Parse URL query params để lấy page number
       const urlParams = new URLSearchParams(window.location.search);
@@ -2632,13 +2991,48 @@ const WuServicesPage: React.FC = () => {
     setServices([]);
     setTotal(0);
     setLoading(false);
-  }, [activeTabKey]);
+  }, [activeTabKey, initialReactData]);
 
   // Lấy category đang active
-  const activeCategory = allCategories.find(c => c.key === activeTabKey) || allCategories[0] || { key: '', title: '', color: '', icon: null, description: '' };
+  const activeCategory = allCategories.find(c => c.key === activeTabKey) || visibleCategories[0] || { key: '', title: '', color: '', icon: null, description: '' };
 
   // Xác định selectedKey cho menu/submenu (clean URLs)
-  const selectedMenuKey = activeTabKey ? `/${activeTabKey}` : `/${DEFAULT_CATEGORY}`;
+  const selectedMenuKey = isBridgeLandingRoute
+    ? '/hop-tac-kinh-doanh'
+    : (slug ? `/${slug}` : (activeTabKey ? `/${activeTabKey}` : `/${DEFAULT_CATEGORY}`));
+
+  if (isLotteryLandingRoute) {
+    const lotteryKey = 'thong-ke-ket-qua-xo-so';
+    const lotteryMeta = getHeaderMeta(lotteryKey);
+    const lotteryColor = lotteryMeta.color || '#722ed1';
+    const lotteryTitle = lotteryMeta.title || t('website.menu.lottery_statistics', 'Thống Kê Kết Quả Xổ Số');
+    const lotteryDesc = lotteryMeta.description || t('website.services.lottery.description', 'Thống kê và tổng hợp dữ liệu kết quả xổ số theo ngày, đài và miền.');
+    const lotteryContent = resolveCategoryLandingContent(lotteryKey);
+
+    return (
+      <WebsiteLayout menuItems={menuItems} selectedKey={selectedMenuKey}>
+        <main style={{ maxWidth: 1080, margin: '0 auto', padding: '24px 24px 96px' }}>
+          <section aria-labelledby="lottery-landing-title" style={{ background: 'var(--card-bg, #fff)', borderRadius: 20, border: `1px solid ${lotteryColor}22`, boxShadow: `0 8px 32px ${lotteryColor}11`, overflow: 'hidden' }}>
+            <header style={{ padding: '24px 24px 16px', borderBottom: `1px solid ${lotteryColor}18`, background: `linear-gradient(120deg, ${lotteryColor}12 0%, transparent 70%)` }}>
+              <h1 id="lottery-landing-title" style={{ margin: 0, color: lotteryColor, fontWeight: 800, letterSpacing: 0.2, fontSize: 32, lineHeight: 1.25 }}>
+                {lotteryMeta.icon} <span style={{ marginLeft: 8 }}>{lotteryTitle}</span>
+              </h1>
+              <Paragraph style={{ margin: '10px 0 0', color: 'var(--text-secondary)', fontSize: 17 }}>{lotteryDesc}</Paragraph>
+            </header>
+
+            <div style={{ padding: '20px 24px 28px' }}>
+              <article
+                className="category-content-intro"
+                style={{ fontSize: 16, lineHeight: 1.85, color: 'var(--text-primary)' }}
+                dangerouslySetInnerHTML={{ __html: sanitizeHtmlForRender(decodeHtml(lotteryContent) || '') }}
+              />
+            </div>
+          </section>
+        </main>
+      </WebsiteLayout>
+    );
+  }
+
   return (
     <WebsiteLayout menuItems={menuItems} selectedKey={selectedMenuKey}>
       <main style={{ maxWidth: 1200, margin: "0 auto", padding: 24, paddingBottom: 96 }}>

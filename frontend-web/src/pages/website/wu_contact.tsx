@@ -129,7 +129,7 @@ export default function WuContact() {
     {
       icon: <PhoneOutlined style={{ fontSize: "24px", color: "#1890ff" }} />,
       title: t("website.contact.phone", "Điện Thoại/Zalo"),
-      content: "0964014947",
+      content: "0388.610.885",
       description: t("website.contact.call_anytime", "Gọi/Zalo bất cứ lúc nào")
     },
     {

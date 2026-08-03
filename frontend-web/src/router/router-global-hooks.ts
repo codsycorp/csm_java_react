@@ -41,6 +41,8 @@ if (!websiteRoutes.length) {
 		"/dich-vu",
 		"/services/live",
 		"/phan-mem",
+		"/thong-ke-ket-qua-xo-so",
+		"/hop-tac-kinh-doanh",
 		"/bat-dong-san",
 		"/lam-dep-my-pham",
 		"/cho-thue-xe",
@@ -119,6 +121,10 @@ function isWebsiteRoute(pathname: string) {
 	const detailMatch = pathname.match(/^\/([^/]+)\/[^/]+$/);
 	if (detailMatch) {
 		const category = detailMatch[1];
+		if (categories.length === 0) {
+			// Allow detail routes during bootstrap; category list may be fetched asynchronously.
+			return true;
+		}
 		// Kiểm tra category có trong SSR categories không
 		const isValidCategory = categories.some(cat => isSSRCategory(cat) && cat.slug === category);
 		if (isValidCategory) {

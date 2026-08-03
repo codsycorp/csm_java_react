@@ -27,7 +27,7 @@ export default function WuCategoryPage() {
   const isGroupRoute = Boolean(catObj && catObj.is_group_slug === true);
 
   // Bridge keeps legacy service-style layout.
-  if (isGroupRoute && slug === 'cau-noi-kinh-doanh-online') {
+  if (isGroupRoute && slug === 'hop-tac-kinh-doanh') {
     return <WuServices />;
   }
 

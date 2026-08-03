@@ -413,6 +413,59 @@ function mapSsrDetailToPost(sd: any): ServicePost {
   return mapped;
 }
 
+function resolveBackendSSRBaseUrl(): string {
+  if (typeof window === 'undefined') return '';
+  const host = window.location.hostname;
+  const port = window.location.port;
+  if ((host === 'localhost' || host === '127.0.0.1') && (port === '3333' || port === '5173')) {
+    return 'http://localhost:9999';
+  }
+  return window.location.origin;
+}
+
+function extractInitialReactDataFromHtml(html: string): any | null {
+  if (!html || typeof html !== 'string') return null;
+  const marker = 'window.__INITIAL_REACT_DATA__=';
+  const start = html.indexOf(marker);
+  if (start < 0) return null;
+
+  const from = start + marker.length;
+  const scriptEnd = html.indexOf('</script>', from);
+  if (scriptEnd < 0) return null;
+
+  const segment = html.slice(from, scriptEnd);
+  const semicolonPos = segment.lastIndexOf(';');
+  const raw = (semicolonPos >= 0 ? segment.slice(0, semicolonPos) : segment).trim();
+  if (!raw) return null;
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+async function fetchSSRInitialDataByCurrentPath(pathname: string, search: string): Promise<any | null> {
+  try {
+    const base = resolveBackendSSRBaseUrl();
+    if (!base || !pathname) return null;
+    const url = new URL(`${base}${pathname}${search || ''}`);
+    if (base.includes('localhost:9999')) {
+      url.searchParams.set('__host', window.location.host || 'localhost:3333');
+    }
+    const resp = await fetch(url.toString(), {
+      method: 'GET',
+      credentials: 'include',
+      headers: { Accept: 'text/html,application/xhtml+xml' },
+    });
+    if (!resp.ok) return null;
+    const html = await resp.text();
+    return extractInitialReactDataFromHtml(html);
+  } catch {
+    return null;
+  }
+}
+
 // Hook lấy chi tiết dịch vụ từ SSR (không gọi API phía client)
 function useServiceDetailAndRelated(category: string | undefined, id: string | undefined) {
   const [post, setPost] = React.useState<ServicePost | null>(null);
@@ -425,154 +478,170 @@ function useServiceDetailAndRelated(category: string | undefined, id: string | u
   // Do NOT re-fetch main post when relatedPage changes!
   // ✅ CRITICAL: Must use SSR data for detail post - server is single source of truth
   React.useEffect(() => {
+    let cancelled = false;
+
     if (!category || !id) {
       setLoading(false);
       setError('Thiếu tham số danh mục hoặc slug.');
       return;
     }
 
-    setLoading(true);
-    setError(null);
+    const loadDetailFromSSR = async () => {
+      setLoading(true);
+      setError(null);
 
-    let ssrDetailPost: ServicePost | null = null;
-    let relatedPrefilled = false;
-    let targetServiceType = '';
+      let ssrDetailPost: ServicePost | null = null;
+      let relatedPrefilled = false;
+      let targetServiceType = '';
 
-    // Parse SSR data - MUST exist for detail pages (rendered by backend with correct slug)
-    const w: any = (typeof window !== 'undefined') ? window : undefined;
-    const initial = w && (w.__INITIAL_REACT_DATA__ || w.initialReactData);
+      const w: any = (typeof window !== 'undefined') ? window : undefined;
+      const currentPath = w?.location?.pathname || '';
+      const currentSearch = w?.location?.search || '';
+      let initial = w && (w.__INITIAL_REACT_DATA__ || w.initialReactData);
 
-    if (initial && initial.currentPagePath === (w?.location?.pathname || '')) {
-      try {
-        // Main detail post from SSR
-        if (initial.serviceDetail) {
-          ssrDetailPost = mapSsrDetailToPost(initial.serviceDetail);
-          setPost(ssrDetailPost);
-          targetServiceType = ssrDetailPost.serviceType || ssrDetailPost.category || category || '';
-          console.log('✅ SSR: Loaded service detail from SSR (server is source of truth):', ssrDetailPost.title);
-        } else {
-          console.warn('⚠️ WARNING: No serviceDetail in SSR data - backend should provide this for detail pages');
+      const hasCurrentInlineSSR = Boolean(
+        initial
+        && initial.currentPagePath === currentPath
+        && (initial.serviceDetail || (Array.isArray(initial.serviceDetailList) && initial.serviceDetailList.length > 0))
+      );
+
+      if (!hasCurrentInlineSSR) {
+        const fetchedInitial = await fetchSSRInitialDataByCurrentPath(currentPath, currentSearch);
+        if (fetchedInitial && !cancelled) {
+          initial = fetchedInitial;
+          if (w) {
+            w.initialReactData = fetchedInitial;
+          }
         }
+      }
 
-        // Related posts from SSR (new structure with pagination metadata)
-        if (Array.isArray(initial.relatedDetailList) && initial.relatedDetailList.length > 0) {
-          const getThumbnail = (r: any): string => {
-            const value = r.thumbnail || r.cover || '';
-            if (Array.isArray(value)) return value[0] || '';
-            if (typeof value === 'string') {
-              try {
-                const parsed = JSON.parse(value);
-                if (Array.isArray(parsed)) return parsed[0] || '';
-              } catch {}
-            }
-            return value || '';
-          };
-          const mapped = initial.relatedDetailList
-            .filter((r: any) => String(r.id || r.service_id || '') !== id)
-            .map((r: any) => ({
-              id: String(r.id || r.service_id || ''),
-              title: String(r.title || ''),
-              slug: r.slug || '',
-              excerpt: r.excerpt || r.summary || '',
-              thumbnail: getThumbnail(r),
-              images: parseMediaUrls(r.images),
-              videos: parseMediaUrls(r.videos),
-              serviceType: r.service_type || '',
-              category: r.service_type || '',
-              publishDate: r.publish_date || r.created_at || r.updated_at || '',
-            })) as ServicePost[];
-          // ✅ CRITICAL: Filter to same service_type ONLY (backend already filters, double-check client-side)
-          const filtered = targetServiceType
-            ? mapped.filter((r) => {
-                const rType = r.serviceType || r.category || '';
-                return rType === targetServiceType;
-              })
-            : mapped;
-          // ✅ Adjust total count to match filtered results if server total doesn't account for exclusion
-          const serverTotal = typeof initial.totalRelatedCount === 'number'
-            ? initial.totalRelatedCount
-            : mapped.length;
-          // Backend already excludes current post and filters by service_type, so use server total
-          const safeTotal = serverTotal > 0 ? serverTotal : filtered.length;
-          const serverPaginated = Boolean(initial.relatedNextCursor) || serverTotal > mapped.length;
-          if (serverPaginated) {
-            setRelatedPosts(filtered);
-            setTotalRelated(safeTotal);
+      if (initial && initial.currentPagePath === currentPath) {
+        try {
+          // Main detail post from SSR
+          if (initial.serviceDetail) {
+            ssrDetailPost = mapSsrDetailToPost(initial.serviceDetail);
+            setPost(ssrDetailPost);
+            targetServiceType = ssrDetailPost.serviceType || ssrDetailPost.category || category || '';
+            console.log('✅ SSR: Loaded service detail from SSR (server is source of truth):', ssrDetailPost.title);
           } else {
+            console.warn('⚠️ WARNING: No serviceDetail in SSR data - backend should provide this for detail pages');
+          }
+
+          // Related posts from SSR (new structure with pagination metadata)
+          if (Array.isArray(initial.relatedDetailList) && initial.relatedDetailList.length > 0) {
+            const getThumbnail = (r: any): string => {
+              const value = r.thumbnail || r.cover || '';
+              if (Array.isArray(value)) return value[0] || '';
+              if (typeof value === 'string') {
+                try {
+                  const parsed = JSON.parse(value);
+                  if (Array.isArray(parsed)) return parsed[0] || '';
+                } catch {}
+              }
+              return value || '';
+            };
+            const mapped = initial.relatedDetailList
+              .filter((r: any) => String(r.id || r.service_id || '') !== id)
+              .map((r: any) => ({
+                id: String(r.id || r.service_id || ''),
+                title: String(r.title || ''),
+                slug: r.slug || '',
+                excerpt: r.excerpt || r.summary || '',
+                thumbnail: getThumbnail(r),
+                images: parseMediaUrls(r.images),
+                videos: parseMediaUrls(r.videos),
+                serviceType: r.service_type || '',
+                category: r.service_type || '',
+                publishDate: r.publish_date || r.created_at || r.updated_at || '',
+              })) as ServicePost[];
+            const filtered = targetServiceType
+              ? mapped.filter((r) => {
+                  const rType = r.serviceType || r.category || '';
+                  return rType === targetServiceType;
+                })
+              : mapped;
+            const serverTotal = typeof initial.totalRelatedCount === 'number'
+              ? initial.totalRelatedCount
+              : mapped.length;
+            const safeTotal = serverTotal > 0 ? serverTotal : filtered.length;
+            const serverPaginated = Boolean(initial.relatedNextCursor) || serverTotal > mapped.length;
+            if (serverPaginated) {
+              setRelatedPosts(filtered);
+              setTotalRelated(safeTotal);
+            } else {
+              setRelatedPosts(filtered);
+              setTotalRelated(filtered.length);
+            }
+            relatedPrefilled = true;
+          }
+
+          // Legacy fallback (rare) - use SSR list if provided
+          if (!ssrDetailPost && Array.isArray(initial.serviceDetailList) && initial.serviceDetailList.length > 0) {
+            const getThumbnail = (r: any): string => {
+              const value = r.thumbnail || r.cover || '';
+              if (Array.isArray(value)) return value[0] || '';
+              if (typeof value === 'string') {
+                try {
+                  const parsed = JSON.parse(value);
+                  if (Array.isArray(parsed)) return parsed[0] || '';
+                } catch {}
+              }
+              return value || '';
+            };
+            const mapped = initial.serviceDetailList
+              .filter((r: any) => String(r.id || r.service_id || '') !== id)
+              .map((r: any) => ({
+                id: String(r.id || r.service_id || ''),
+                title: String(r.title || ''),
+                slug: r.slug || '',
+                excerpt: r.excerpt || r.summary || '',
+                thumbnail: getThumbnail(r),
+                images: parseMediaUrls(r.images),
+                videos: parseMediaUrls(r.videos),
+                serviceType: r.service_type || '',
+                category: r.service_type || '',
+                publishDate: r.created_at || r.updated_at || '',
+              })) as ServicePost[];
+
+            const filtered = targetServiceType
+              ? mapped.filter((r) => {
+                  const rType = r.serviceType || r.category || '';
+                  return rType === targetServiceType;
+                })
+              : mapped;
             setRelatedPosts(filtered);
             setTotalRelated(filtered.length);
+            relatedPrefilled = true;
+
+            console.warn('⚠️ Using legacy serviceDetailList (no pagination metadata)');
           }
-          relatedPrefilled = true;
+        } catch (e) {
+          console.warn('⚠️ Error loading SSR data:', e);
         }
-
-        // Legacy fallback (rare) - use SSR list if provided
-        if (!ssrDetailPost && Array.isArray(initial.serviceDetailList) && initial.serviceDetailList.length > 0) {
-          const getThumbnail = (r: any): string => {
-            const value = r.thumbnail || r.cover || '';
-            if (Array.isArray(value)) return value[0] || '';
-            if (typeof value === 'string') {
-              try {
-                const parsed = JSON.parse(value);
-                if (Array.isArray(parsed)) return parsed[0] || '';
-              } catch {}
-            }
-            return value || '';
-          };
-          const mapped = initial.serviceDetailList
-            .filter((r: any) => String(r.id || r.service_id || '') !== id)
-            .map((r: any) => ({
-              id: String(r.id || r.service_id || ''),
-              title: String(r.title || ''),
-              slug: r.slug || '',
-              excerpt: r.excerpt || r.summary || '',
-              thumbnail: getThumbnail(r),
-              images: parseMediaUrls(r.images),
-              videos: parseMediaUrls(r.videos),
-              serviceType: r.service_type || '',
-              category: r.service_type || '',
-              publishDate: r.created_at || r.updated_at || '',
-            })) as ServicePost[];
-
-          // ✅ CRITICAL: Filter to same service_type ONLY
-          const filtered = targetServiceType
-            ? mapped.filter((r) => {
-                const rType = r.serviceType || r.category || '';
-                return rType === targetServiceType;
-              })
-            : mapped;
-          setRelatedPosts(filtered);
-          setTotalRelated(filtered.length);
-          relatedPrefilled = true;
-
-          console.warn('⚠️ Using legacy serviceDetailList (no pagination metadata)');
-        }
-      } catch (e) {
-        console.warn('⚠️ Error loading SSR data:', e);
+      } else {
+        console.log(`ℹ️ No SSR data or mismatched path: SSR available=${!!initial}, currentPath=${initial?.currentPagePath}, pagePath=${currentPath}`);
       }
 
-      // Clear SSR data after first use to prevent stale data on SPA navigation
-      if (w && w.__INITIAL_REACT_DATA__) {
-        delete w.__INITIAL_REACT_DATA__;
-      }
-      if (w && w.initialReactData) {
-        delete w.initialReactData;
-      }
-    } else {
-      console.log(`ℹ️ No SSR data or mismatched path: SSR available=${!!initial}, currentPath=${initial?.currentPagePath}, pagePath=${w?.location?.pathname}`);
-    }
+      if (cancelled) return;
 
-    if (!ssrDetailPost) {
-      setError('Không tìm thấy dữ liệu SSR cho tin này. Vui lòng tải lại trang.');
-      setPost(null);
-      setRelatedPosts([]);
-      setTotalRelated(0);
-    } else if (!relatedPrefilled) {
-      // Backend did not send related posts; keep UI stable with empty state
-      setRelatedPosts([]);
-      setTotalRelated(0);
-    }
+      if (!ssrDetailPost) {
+        setError('Không tìm thấy dữ liệu SSR cho tin này. Vui lòng tải lại trang.');
+        setPost(null);
+        setRelatedPosts([]);
+        setTotalRelated(0);
+      } else if (!relatedPrefilled) {
+        setRelatedPosts([]);
+        setTotalRelated(0);
+      }
 
-    setLoading(false);
+      setLoading(false);
+    };
+
+    void loadDetailFromSSR();
+
+    return () => {
+      cancelled = true;
+    };
   }, [category, id]);
   
   return { post, relatedPosts, totalRelated, loading, error };

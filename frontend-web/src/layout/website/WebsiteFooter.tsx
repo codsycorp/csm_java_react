@@ -102,7 +102,7 @@ function isSSRGroupCategory(cat: any): cat is {
             </div>
             <div style={{ fontSize: 15, marginBottom: 10 }}>
               <PhoneOutlined style={{ color: "var(--brand-primary, #ffa726)", marginRight: 8 }} />
-              {t("website.footer.phone", "0964014947 (Phone & Zalo)")}
+              {t("website.footer.phone", "0388.610.885 (Phone & Zalo)")}
             </div>
             <div style={{ fontSize: 15, marginBottom: 18 }}>
               <EnvironmentOutlined style={{ color: "var(--brand-primary, #ffa726)", marginRight: 8 }} />

@@ -330,6 +330,22 @@ func extractDateOnly(lastmod string) string {
 	return lastmod
 }
 
+func canonicalSEOPath(path string) string {
+	p := "/" + strings.Trim(strings.TrimSpace(path), "/")
+	if p == "/" {
+		return p
+	}
+	legacy := "/cau-noi-kinh-doanh-online"
+	canonical := "/hop-tac-kinh-doanh"
+	if p == legacy {
+		return canonical
+	}
+	if strings.HasPrefix(p, legacy+"/") {
+		return canonical + strings.TrimPrefix(p, legacy)
+	}
+	return p
+}
+
 func stripHTMLToText(html string, maxLen int) string {
 	html = strings.TrimSpace(html)
 	if html == "" {
