@@ -622,6 +622,7 @@
       lgSlrAutoThMinZeroWeek: "Tuần 0 (Nam/Bắc): lấy khi >=",
       lgSlrAutoThSoFilter: "Dãy số xét TH (hệ 2/3)",
       lgSlrAutoThNgayCxFilter: "Ngày chưa xổ (vd: 6-16)",
+      lgSlrAutoThKyCxFilter: "Kỳ chưa xổ (vd: 6-16)",
       lgSlrAutoThHitToday: "Bảng dò Đến Ngày",
       lgNbColSo: "Bộ số",
       lgNbColDauCp: "Đầu chính phụ (D+P)",
@@ -889,6 +890,7 @@
       lgSlrAutoThMinZeroWeek: "Zero-week streak (S/N): keep if >=",
       lgSlrAutoThSoFilter: "Input numbers for TH (2/3 digits)",
       lgSlrAutoThNgayCxFilter: "Days no-show filter (e.g. 6-16)",
+      lgSlrAutoThKyCxFilter: "Periods no-show filter (e.g. 6-16)",
       lgSlrAutoThHitToday: "End-date hit scan",
       lgNbColSo: "Number Set",
       lgNbColDauCp: "Main+Sub Head (D+P)",
@@ -1156,6 +1158,7 @@
       lgSlrAutoThMinZeroWeek: "南/北 0 周连空：保留 >=",
       lgSlrAutoThSoFilter: "综合筛选号码（2/3位）",
       lgSlrAutoThNgayCxFilter: "未出天数筛选（如 6-16）",
+      lgSlrAutoThKyCxFilter: "未出期数筛选（如 6-16）",
       lgSlrAutoThHitToday: "截止日期命中扫描",
       lgNbColSo: "号码组",
       lgNbColDauCp: "主副头位 (D+P)",
@@ -3082,6 +3085,7 @@
     var _slr_autoThMinZeroWeek = useState(null), legacySlrAutoThMinZeroWeek = _slr_autoThMinZeroWeek[0], setLegacySlrAutoThMinZeroWeek = _slr_autoThMinZeroWeek[1];
     var _slr_autoThSoFilter = useState(""), legacySlrAutoThSoFilter = _slr_autoThSoFilter[0], setLegacySlrAutoThSoFilter = _slr_autoThSoFilter[1];
     var _slr_autoThNgayCxFilter = useState(""), legacySlrAutoThNgayCxFilter = _slr_autoThNgayCxFilter[0], setLegacySlrAutoThNgayCxFilter = _slr_autoThNgayCxFilter[1];
+    var _slr_autoThKyCxFilter = useState(""), legacySlrAutoThKyCxFilter = _slr_autoThKyCxFilter[0], setLegacySlrAutoThKyCxFilter = _slr_autoThKyCxFilter[1];
 
     // --- SLR Auto-filtered rows (kept for display binding) ---
     var legacySlrAutoFilteredRows = useMemo(function () {
@@ -11424,6 +11428,7 @@
       var zeroWeekRaw = legacySlrAutoThMinZeroWeek;
       var soFilterRaw = String(legacySlrAutoThSoFilter || "").trim();
       var ngayCxRaw = String(legacySlrAutoThNgayCxFilter || "").trim();
+      var kyCxRaw = String(legacySlrAutoThKyCxFilter || "").trim();
       var minNgayCx3Nb = (minRaw === null || minRaw === undefined || String(minRaw).trim() === "") ? null : Number(minRaw);
       var maxKtnLast = (maxRaw === null || maxRaw === undefined || String(maxRaw).trim() === "") ? null : Number(maxRaw);
       var minZeroWeek = (zeroWeekRaw === null || zeroWeekRaw === undefined || String(zeroWeekRaw).trim() === "") ? null : Number(zeroWeekRaw);
@@ -11450,12 +11455,24 @@
         });
       }
 
+      var kyCxValues = [];
+      if (kyCxRaw) {
+        var seenKy = {};
+        kyCxRaw.split(/[\s,;|\-/]+/).forEach(function (part) {
+          var n = parseInt(String(part || "").trim(), 10);
+          if (isNaN(n) || n < 0 || seenKy[n]) return;
+          seenKy[n] = true;
+          kyCxValues.push(n);
+        });
+      }
+
       return {
         minNgayCx3Nb: isNaN(minNgayCx3Nb) ? null : minNgayCx3Nb,
         maxKtnLast: isNaN(maxKtnLast) ? null : maxKtnLast,
         minZeroWeek: isNaN(minZeroWeek) ? null : minZeroWeek,
         soFilterTokens: soFilterTokens,
-        ngayCxValues: ngayCxValues
+        ngayCxValues: ngayCxValues,
+        kyCxValues: kyCxValues
       };
     }
 
@@ -11465,7 +11482,8 @@
         || filterCfg.maxKtnLast !== null
         || filterCfg.minZeroWeek !== null
         || (Array.isArray(filterCfg.soFilterTokens) && filterCfg.soFilterTokens.length > 0)
-        || (Array.isArray(filterCfg.ngayCxValues) && filterCfg.ngayCxValues.length > 0);
+        || (Array.isArray(filterCfg.ngayCxValues) && filterCfg.ngayCxValues.length > 0)
+        || (Array.isArray(filterCfg.kyCxValues) && filterCfg.kyCxValues.length > 0);
     }
 
     function parseLegacySerKqtLastWeekValue(serKqt) {
@@ -11521,6 +11539,11 @@
       if (Array.isArray(filterCfg.ngayCxValues) && filterCfg.ngayCxValues.length) {
         var ngayCx = Number(rec.ngayCXHT || 0);
         if (filterCfg.ngayCxValues.indexOf(ngayCx) < 0) return false;
+      }
+
+      if (Array.isArray(filterCfg.kyCxValues) && filterCfg.kyCxValues.length) {
+        var kyCx = Number(rec.kyCXHT || 0);
+        if (filterCfg.kyCxValues.indexOf(kyCx) < 0) return false;
       }
 
       return true;
@@ -12196,6 +12219,7 @@
           if (thFilterCfg.minZeroWeek !== null) filterNote += " Tuần0>=" + thFilterCfg.minZeroWeek;
           if (thFilterCfg.soFilterTokens && thFilterCfg.soFilterTokens.length) filterNote += " SốTH∩{" + thFilterCfg.soFilterTokens.join(",") + "}";
           if (thFilterCfg.ngayCxValues && thFilterCfg.ngayCxValues.length) filterNote += " NgàyCX∈{" + thFilterCfg.ngayCxValues.join(",") + "}";
+          if (thFilterCfg.kyCxValues && thFilterCfg.kyCxValues.length) filterNote += " KỳCX∈{" + thFilterCfg.kyCxValues.join(",") + "}";
           if (filteredOutCount || extraFilteredOutCount) filterNote += " (bỏ " + (filteredOutCount + extraFilteredOutCount) + ")";
         }
         var staleNote = missingDd3Count ? (" | Thiếu DD3 Nam-Bắc: " + missingDd3Count) : "";
@@ -15119,6 +15143,15 @@
                         value: legacySlrAutoThNgayCxFilter,
                         placeholder: "6-16 hoặc 6,16",
                         onChange: function (e) { setLegacySlrAutoThNgayCxFilter(String(e && e.target && e.target.value || "")); },
+                        style: { width: "100%" }
+                      })
+                    ]),
+                    h("div", { className: "kqxs-slr-field", style: { marginBottom: 0, minWidth: 160, flex: "1 1 160px" } }, [
+                      h("div", { className: "kqxs-slr-label" }, tt.lgSlrAutoThKyCxFilter || "Kỳ chưa xổ (vd: 6-16)"),
+                      h(Input, {
+                        value: legacySlrAutoThKyCxFilter,
+                        placeholder: "6-16 hoặc 6,16",
+                        onChange: function (e) { setLegacySlrAutoThKyCxFilter(String(e && e.target && e.target.value || "")); },
                         style: { width: "100%" }
                       })
                     ])
