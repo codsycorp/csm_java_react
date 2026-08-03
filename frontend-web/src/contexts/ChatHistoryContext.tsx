@@ -46,10 +46,35 @@ interface ChatHistoryContextValue {
 
 const ChatHistoryContext = createContext<ChatHistoryContextValue | null>(null);
 
+const noopAsync = async () => {};
+const noopAsyncFalse = async () => false;
+const noop = () => {};
+const fallbackChatHistoryContext: ChatHistoryContextValue = {
+  messages: {},
+  sendMessage: noop,
+  loadHistory: noopAsync,
+  markAsRead: noop,
+  broadcastNotification: noopAsyncFalse,
+  refreshAllMessages: noopAsync,
+  registerGuestPhone: noopAsync,
+  unreadCounts: {},
+  typingUsers: {},
+  connected: false,
+  activeChats: [],
+  openChat: noop,
+  closeChat: noop,
+};
+
+let didWarnMissingProvider = false;
+
 export const useChatHistory = () => {
   const context = useContext(ChatHistoryContext);
   if (!context) {
-    throw new Error('useChatHistory must be used within ChatHistoryProvider');
+	if (import.meta.env.DEV && !didWarnMissingProvider) {
+		didWarnMissingProvider = true;
+		console.warn('useChatHistory used outside ChatHistoryProvider; falling back to no-op context.');
+	}
+	return fallbackChatHistoryContext;
   }
   return context;
 };

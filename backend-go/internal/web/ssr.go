@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"log"
 	"os"
 	"slices"
@@ -77,6 +78,7 @@ type seoMeta struct {
 	Image       string
 	Lang        string
 	Slug        string
+	FromService bool
 }
 
 func (s seoMeta) toRouteValue() map[string]any {
@@ -195,6 +197,7 @@ func ResolveRPIndexPub(rm *data.RecordManager, host string) string {
 	if domain == "" {
 		return ""
 	}
+	isAdminHost := strings.HasPrefix(strings.ToLower(strings.TrimSpace(domain)), "admin.")
 	filter := model.SearchFilter{
 		Operator: "AND",
 		Conditions: []model.SearchFilter{
@@ -206,12 +209,29 @@ func ResolveRPIndexPub(rm *data.RecordManager, host string) string {
 		},
 	}
 	result := rm.Filter("csm", "sys_la_routers", filter)
+	fallback := ""
 	for _, row := range rowsFrom(result) {
 		if rp := strings.Trim(strings.Trim(recordStr(row, "rp_index"), "/"), " "); rp != "" {
+			rpLower := strings.ToLower(rp)
+			if isAdminHost {
+				if rpLower == "admin" {
+					return rp
+				}
+				if fallback == "" {
+					fallback = rp
+				}
+				continue
+			}
+			if rpLower == "admin" {
+				if fallback == "" {
+					fallback = rp
+				}
+				continue
+			}
 			return rp
 		}
 	}
-	return ""
+	return fallback
 }
 
 func BuildSitemap(rm *data.RecordManager, host string) string {
@@ -326,8 +346,10 @@ func sitemapURLEntry(url, lastmod, changefreq, priority string) string {
 
 func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 	host = resolveSSRHostForDev(host, queryStr)
+	isAdminHost := strings.HasPrefix(strings.ToLower(strings.TrimSpace(DomainFromHost(host))), "admin.")
 	normalizedPath := NormalizeIncomingWebPath(uri)
 	route := finalizeSSRRoute(resolveRoute(ctx.RM, host, normalizedPath), ctx.RM, host)
+	isWebAppType := strings.EqualFold(strings.TrimSpace(route.AppType), "web")
 	domain := route.Domain
 	if domain == "" {
 		domain = DomainFromHost(host)
@@ -350,32 +372,52 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 	baseURL := protocol + "://" + hostStr
 	canonical := buildLocalizedURL(baseURL, normalizedPath, lang)
 
-	categories, dynamicTemplates, mainServiceCode, defaultServiceCode :=
-		loadCategoriesFull(ctx.RM, route, domain, lang)
+	categories := []any{}
+	dynamicTemplates := map[string]any{}
+	mainServiceCode := ""
+	defaultServiceCode := ""
+	if isWebAppType {
+		categories, dynamicTemplates, mainServiceCode, defaultServiceCode =
+			loadCategoriesFull(ctx.RM, route, domain, lang)
+	}
 
 	pageTitle := route.FTitle
 	if pageTitle == "" {
-		pageTitle = "Trang web của tôi"
+		if isAdminHost {
+			pageTitle = "CSM"
+		} else {
+			pageTitle = "Trang web của tôi"
+		}
 	}
 	pageDescription := route.FKeyword
 	if pageDescription == "" {
-		pageDescription = "Mô tả mặc định"
+		if isAdminHost {
+			pageDescription = "Hệ thống quản trị CSM"
+		} else {
+			pageDescription = "Mô tả mặc định"
+		}
 	}
 	pageKeywords := route.FKeyword
 	ogImage := absoluteAssetURL(route.FLogo, protocol, hostStr)
 
 	var seo *seoMeta
-	if route.AppID != "" && route.TblServices != "" && route.TblServiceDetail != "" {
+	if isWebAppType && route.AppID != "" && route.TblServices != "" && route.TblServiceDetail != "" {
 		if s := resolveSEOForServiceRoute(ctx.RM, route, domain, normalizedPath, mainServiceCode, defaultServiceCode, lang); s != nil {
 			seo = s
 			if seo.Title != "" {
 				pageTitle = seo.Title
 			}
-			if seo.Description != "" {
+			if seo.FromService {
+				// Keep category metadata strictly sourced from TblServices, without router fallback.
 				pageDescription = seo.Description
-			}
-			if seo.Keywords != "" {
 				pageKeywords = seo.Keywords
+			} else {
+				if seo.Description != "" {
+					pageDescription = seo.Description
+				}
+				if seo.Keywords != "" {
+					pageKeywords = seo.Keywords
+				}
 			}
 			if seo.Image != "" {
 				ogImage = absoluteAssetURL(seo.Image, protocol, hostStr)
@@ -408,15 +450,18 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 		"app_id":        route.AppID,
 	}
 
-	ssrRoutes := map[string]any{normalizedPath: map[string]any{
-		"title":       pageTitle,
-		"description": pageDescription,
-		"keywords":    pageKeywords,
-		"image":       ogImage,
-		"lang":        lang,
-	}}
-	if seo != nil {
-		ssrRoutes[normalizedPath] = seo.toRouteValue()
+	ssrRoutes := map[string]any{}
+	if isWebAppType {
+		ssrRoutes[normalizedPath] = map[string]any{
+			"title":       pageTitle,
+			"description": pageDescription,
+			"keywords":    pageKeywords,
+			"image":       ogImage,
+			"lang":        lang,
+		}
+		if seo != nil {
+			ssrRoutes[normalizedPath] = seo.toRouteValue()
+		}
 	}
 
 	initialData := map[string]any{
@@ -430,7 +475,7 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 	}
 
 	// Keep data hydration independent from static index availability: local/dev routes may omit rp_index.
-	if route.AppID != "" && route.TblServiceDetail != "" {
+	if isWebAppType && route.AppID != "" && route.TblServiceDetail != "" {
 		listing := resolveServiceListing(ctx.RM, route, domain, normalizedPath, params, mainServiceCode, defaultServiceCode)
 		enrichInitialData(initialData, listing, protocol, hostStr)
 		if _, ok := listing["serviceDetail"]; !ok && looksLikeDetailURI(normalizedPath) {
@@ -449,6 +494,7 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 	if strings.HasPrefix(ogImage, "http://") || strings.HasPrefix(ogImage, "https://") {
 		preload = fmt.Sprintf(`<link rel="preload" as="image" href="%s" fetchpriority="high">`, htmlEsc(ogImage))
 	}
+	pageType := resolveSSRPageType(initialData)
 
 	filePath := ctx.RM.GetStaticFile(indexPath)
 	if filePath == "" && strings.HasPrefix(DomainFromHost(host), "admin.") {
@@ -471,6 +517,32 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 	if filePath != "" {
 		raw, err := os.ReadFile(filePath)
 		if err == nil {
+			lowerFilePath := strings.ToLower(filePath)
+			if strings.Contains(lowerFilePath, string(os.PathSeparator)+"frontend"+string(os.PathSeparator)+"index.html") || strings.Contains(lowerFilePath, string(os.PathSeparator)+"admin"+string(os.PathSeparator)+"index.html") {
+				html, tplErr := renderPublicShellTemplate(string(raw), publicShellData{
+					Lang:            lang,
+					BaseURL:         baseURL,
+					Title:           pageTitle,
+					Description:     pageDescription,
+					Keywords:        pageKeywords,
+					Canonical:       canonical,
+					Image:           ogImage,
+					SiteName:        baseURL,
+					Logo:            routeLogo,
+					GSV:             route.GSV,
+					GTag:            route.GTag,
+					AppID:           route.AppID,
+					PageType:        pageType,
+					Preload:         template.HTML(preload),
+					StructuredData:  template.HTML(buildStructuredDataGraph(&preprocessCtx{Title: pageTitle, Description: pageDescription, Keywords: pageKeywords, Canonical: canonical, Image: ogImage, SiteName: baseURL, Logo: routeLogo, GSV: route.GSV, GTag: route.GTag, AppID: route.AppID, PageType: pageType, Author: resolveSSRAuthor(initialData), PublishedAt: resolveSSRPublishedAt(initialData), ModifiedAt: resolveSSRModifiedAt(initialData), Lang: lang, PagePath: normalizedPath, BaseURL: baseURL, DefaultCategory: defaultServiceCode, InitialData: initialData, Categories: categories})),
+					InjectedScripts: template.HTML(scripts),
+				})
+				if tplErr == nil {
+					return html
+				}
+				log.Printf("SSR template render failed for %s: %v", filePath, tplErr)
+			}
+
 			html := string(raw)
 			preprocessHTML(&html, &preprocessCtx{
 				Title:           pageTitle,
@@ -483,7 +555,7 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 				GSV:             route.GSV,
 				GTag:            route.GTag,
 				AppID:           route.AppID,
-				PageType:        resolveSSRPageType(initialData),
+				PageType:        pageType,
 				Author:          resolveSSRAuthor(initialData),
 				PublishedAt:     resolveSSRPublishedAt(initialData),
 				ModifiedAt:      resolveSSRModifiedAt(initialData),
@@ -624,13 +696,57 @@ func resolveRoute(rm *data.RecordManager, host, path string) resolvedRoute {
 }
 
 func queryReactCatchAllRoute(rm *data.RecordManager, domain string) (resolvedRoute, bool) {
-	return queryRoute(rm, []model.SearchFilter{
+	filter := model.SearchFilter{Operator: "AND", Conditions: []model.SearchFilter{
 		{Field: "domain_name", FilterType: "like", Value: domain},
 		model.EqFilter("f_case", ""),
 		{Field: "rp_index", FilterType: "isnotnull"},
 		{Field: "rp_index", FilterType: "noteq", Value: ""},
 		model.EqFilter("run", 1),
-	})
+	}}
+	rows := rowsFrom(rm.Filter("csm", "sys_la_routers", filter))
+	if len(rows) == 0 {
+		return resolvedRoute{}, false
+	}
+
+	isAdminDomain := strings.HasPrefix(strings.ToLower(strings.TrimSpace(domain)), "admin.")
+	bestScore := -1
+	best := resolvedRoute{}
+
+	for _, row := range rows {
+		candidate := resolvedRouteFromRow(row)
+		rp := strings.ToLower(strings.TrimSpace(candidate.RPIndex))
+		score := 0
+
+		if isAdminDomain {
+			if rp == "admin" {
+				score += 100
+			}
+		} else {
+			if rp != "admin" {
+				score += 100
+			}
+		}
+
+		if strings.TrimSpace(candidate.AppID) != "" {
+			score += 20
+		}
+		if strings.TrimSpace(candidate.TblServices) != "" {
+			score += 10
+		}
+		if strings.TrimSpace(candidate.TblServiceDetail) != "" {
+			score += 10
+		}
+
+		if score > bestScore {
+			bestScore = score
+			best = candidate
+		}
+	}
+
+	if bestScore < 0 {
+		return resolvedRoute{}, false
+	}
+	return best, true
 }
 
 func mergeRouteForSPA(base, overlay resolvedRoute) resolvedRoute {
@@ -668,6 +784,24 @@ func finalizeSSRRoute(route resolvedRoute, rm *data.RecordManager, host string) 
 		domain = DomainFromHost(host)
 	}
 	route.Domain = domain
+	isAdminHost := strings.HasPrefix(strings.ToLower(strings.TrimSpace(DomainFromHost(host))), "admin.")
+
+	if isAdminHost {
+		if strings.TrimSpace(route.RPIndex) == "" {
+			route.RPIndex = "admin"
+		}
+		// Admin SSR must not inherit public website listing tables.
+		if strings.TrimSpace(route.AppID) == "" {
+			route.AppID = "csm"
+		}
+		route.TblServices = ""
+		route.TblServiceDetail = ""
+		route.AppID = normalizeTableAppID(route.AppID)
+		if strings.TrimSpace(route.FTitle) == "" {
+			route.FTitle = "CSM"
+		}
+		return route
+	}
 
 	if strings.TrimSpace(route.RPIndex) == "" {
 		if pub := ResolveRPIndexPub(rm, host); pub != "" {
@@ -1006,7 +1140,15 @@ func absoluteAssetURL(path, protocol, host string) string {
 func resolveDescriptionFromFields(rm *data.RecordManager, row map[string]any, lang string) string {
 	description := ""
 	if lang != "vi" {
-		description = recordStr(row, "description_"+lang)
+		description = recordStr(row, "meta_description_"+lang)
+	}
+	if description == "" {
+		description = recordStr(row, "meta_description")
+	}
+	if lang != "vi" {
+		if description == "" {
+			description = recordStr(row, "description_"+lang)
+		}
 	}
 	if description == "" {
 		description = recordStr(row, "description")
@@ -1035,7 +1177,15 @@ func resolveDescriptionFromFields(rm *data.RecordManager, row map[string]any, la
 func resolveServiceDescription(rm *data.RecordManager, row map[string]any, lang string) string {
 	description := ""
 	if lang != "vi" {
-		description = recordStr(row, "attributes_description_"+lang)
+		description = recordStr(row, "meta_description_"+lang)
+	}
+	if description == "" {
+		description = recordStr(row, "meta_description")
+	}
+	if lang != "vi" {
+		if description == "" {
+			description = recordStr(row, "attributes_description_"+lang)
+		}
 	}
 	if description == "" {
 		description = recordStr(row, "attributes_description")
@@ -1109,11 +1259,136 @@ func resolveSEOForServiceRoute(
 	if slug == "" || slug == "com.chrome.devtools.json" {
 		slug = "home"
 	}
-	if mainServiceCode != "" && slug == mainServiceCode && defaultServiceCode != "" {
-		slug = defaultServiceCode
+	domainLike := model.SearchFilter{Field: "domain", FilterType: "like", Value: domain}
+	oneSegment := len(parts) == 1
+
+	normalizeDescription := func(desc string) string {
+		return strings.TrimSpace(stripHTMLToText(desc, 220))
 	}
 
-	domainLike := model.SearchFilter{Field: "domain", FilterType: "like", Value: domain}
+	buildServiceMeta := func(row map[string]any) *seoMeta {
+		title := recordLangStr(row, "meta_title", lang)
+		if title == "" {
+			title = recordLangStr(row, "seo_title", lang)
+		}
+		if title == "" {
+			title = recordLangStr(row, "attributes_title", lang)
+		}
+		if title == "" {
+			title = recordLangStr(row, "category", lang)
+		}
+		if title == "" {
+			title = recordLangStr(row, "title", lang)
+		}
+		keywords := strings.TrimSpace(recordLangStr(row, "meta_keywords", lang))
+		if keywords == "" {
+			keywords = strings.TrimSpace(recordLangStr(row, "seo_keywords", lang))
+		}
+		if keywords == "" {
+			keywords = strings.TrimSpace(recordLangStr(row, "attributes_keywords", lang))
+		}
+		if keywords == "" {
+			keywords = strings.TrimSpace(recordLangStr(row, "keywords", lang))
+		}
+		description := normalizeDescription(resolveServiceDescription(rm, row, lang))
+		if description == "" {
+			description = normalizeDescription(resolveDescriptionFromFields(rm, row, lang))
+		}
+		return &seoMeta{
+			Title:       title,
+			Keywords:    keywords,
+			Description: description,
+			Image:       recordStr(row, "image"),
+			Lang:        lang,
+			Slug:        slug,
+			FromService: true,
+		}
+	}
+
+	pickBestServiceRow := func(rows []map[string]any) map[string]any {
+		bestScore := -1
+		best := map[string]any(nil)
+		for _, row := range rows {
+			score := 0
+			rowSlug := strings.TrimSpace(recordStr(row, "slug"))
+			rowCode := strings.TrimSpace(recordStr(row, "service_code"))
+			if strings.EqualFold(rowSlug, slug) {
+				score += 50
+			}
+			if strings.EqualFold(rowCode, slug) {
+				score += 40
+			}
+			if strings.TrimSpace(recordLangStr(row, "attributes_title", lang)) != "" || strings.TrimSpace(recordLangStr(row, "category", lang)) != "" {
+				score += 20
+			}
+			if strings.TrimSpace(recordLangStr(row, "attributes_keywords", lang)) != "" || strings.TrimSpace(recordLangStr(row, "keywords", lang)) != "" {
+				score += 10
+			}
+			if normalizeDescription(resolveServiceDescription(rm, row, lang)) != "" || normalizeDescription(resolveDescriptionFromFields(rm, row, lang)) != "" {
+				score += 20
+			}
+			if recordBool(row, "is_group_slug") {
+				score += 3
+			}
+			if score > bestScore {
+				bestScore = score
+				best = row
+			}
+		}
+		return best
+	}
+
+	queryServiceRow := func(withDomain bool) map[string]any {
+		baseConds := []model.SearchFilter{model.EqFilter("status", "active")}
+		if withDomain && domain != "" {
+			baseConds = append(baseConds, domainLike)
+		}
+
+		slugConds := append([]model.SearchFilter{}, baseConds...)
+		slugConds = append(slugConds, model.EqFilter("slug", slug))
+		rowsSlug := rowsFrom(rm.Filter(route.AppID, route.TblServices, model.SearchFilter{Operator: "AND", Conditions: slugConds}))
+
+		codeConds := append([]model.SearchFilter{}, baseConds...)
+		codeConds = append(codeConds, model.EqFilter("service_code", slug))
+		rowsCode := rowsFrom(rm.Filter(route.AppID, route.TblServices, model.SearchFilter{Operator: "AND", Conditions: codeConds}))
+
+		rows := make([]map[string]any, 0, len(rowsSlug)+len(rowsCode))
+		seen := map[string]struct{}{}
+		for _, row := range rowsSlug {
+			id := strings.TrimSpace(recordStr(row, "id"))
+			if id != "" {
+				if _, ok := seen[id]; ok {
+					continue
+				}
+				seen[id] = struct{}{}
+			}
+			rows = append(rows, row)
+		}
+		for _, row := range rowsCode {
+			id := strings.TrimSpace(recordStr(row, "id"))
+			if id != "" {
+				if _, ok := seen[id]; ok {
+					continue
+				}
+				seen[id] = struct{}{}
+			}
+			rows = append(rows, row)
+		}
+
+		if len(rows) == 0 {
+			return nil
+		}
+		return pickBestServiceRow(rows)
+	}
+
+	if oneSegment {
+		if row := queryServiceRow(true); len(row) > 0 {
+			return buildServiceMeta(row)
+		}
+		if row := queryServiceRow(false); len(row) > 0 {
+			return buildServiceMeta(row)
+		}
+	}
 
 	detailFilter := model.SearchFilter{
 		Operator: "AND",
@@ -1124,62 +1399,22 @@ func resolveSEOForServiceRoute(
 		},
 	}
 	if detail := rm.Find(route.AppID, route.TblServiceDetail, detailFilter); len(detail) > 0 {
+		title := recordLangStr(detail, "title", lang)
 		return &seoMeta{
-			Title:       recordLangStr(detail, "title", lang),
-			Keywords:    recordLangStr(detail, "keywords", lang),
-			Description: resolveDescriptionFromFields(rm, detail, lang),
+			Title:       title,
+			Keywords:    strings.TrimSpace(recordLangStr(detail, "keywords", lang)),
+			Description: normalizeDescription(resolveDescriptionFromFields(rm, detail, lang)),
 			Image:       recordStr(detail, "image"),
 			Lang:        lang,
 			Slug:        slug,
 		}
 	}
 
-	serviceFilter := model.SearchFilter{
-		Operator: "AND",
-		Conditions: []model.SearchFilter{
-			model.EqFilter("is_service", true),
-			model.EqFilter("slug", slug),
-			model.EqFilter("status", "active"),
-			domainLike,
-		},
+	if row := queryServiceRow(true); len(row) > 0 {
+		return buildServiceMeta(row)
 	}
-	if service := rm.Find(route.AppID, route.TblServices, serviceFilter); len(service) > 0 {
-		title := recordLangStr(service, "attributes_title", lang)
-		if title == "" {
-			title = recordLangStr(service, "category", lang)
-		}
-		return &seoMeta{
-			Title:       title,
-			Keywords:    recordLangStr(service, "attributes_keywords", lang),
-			Description: resolveServiceDescription(rm, service, lang),
-			Image:       recordStr(service, "image"),
-			Lang:        lang,
-			Slug:        slug,
-		}
-	}
-
-	menuFilter := model.SearchFilter{
-		Operator: "AND",
-		Conditions: []model.SearchFilter{
-			model.EqFilter("is_service", false),
-			model.EqFilter("slug", slug),
-			model.EqFilter("status", "active"),
-			domainLike,
-		},
-	}
-	if menu := rm.Find(route.AppID, route.TblServices, menuFilter); len(menu) > 0 {
-		title := recordLangStr(menu, "attributes_title", lang)
-		if title == "" {
-			title = recordLangStr(menu, "category", lang)
-		}
-		return &seoMeta{
-			Title:       title,
-			Keywords:    recordLangStr(menu, "attributes_keywords", lang),
-			Description: resolveServiceDescription(rm, menu, lang),
-			Image:       recordStr(menu, "image"),
-			Lang:        lang,
-			Slug:        slug,
-		}
+	if row := queryServiceRow(false); len(row) > 0 {
+		return buildServiceMeta(row)
 	}
 
 	return nil
@@ -1911,9 +2146,9 @@ func preprocessHTML(html *string, ctx *preprocessCtx) {
 	replaceOGContent(html, "og:description", description)
 	replaceOGContent(html, "og:image", image)
 	replaceOGContent(html, "og:image:alt", title)
-	replaceOGContent(html, "twitter:title", title)
-	replaceOGContent(html, "twitter:description", description)
-	replaceOGContent(html, "twitter:image", image)
+	replaceMetaContent(html, "twitter:title", title)
+	replaceMetaContent(html, "twitter:description", description)
+	replaceMetaContent(html, "twitter:image", image)
 
 	if strings.EqualFold(ctx.PageType, "article") {
 		replaceOGContent(html, "og:type", "article")

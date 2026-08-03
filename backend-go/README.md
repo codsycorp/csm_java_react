@@ -275,6 +275,7 @@ chmod +x backend-go/docker-build.sh deploy-go-linux.sh
 
 # 1) Build Linux amd64 native llamacpp (Docker)
 ./backend-go/docker-build.sh --linux --linux-arch amd64 --llamacpp
+./deploy-go-linux.sh root@csmbridge.net /root/la_server /Volumes/Datas/CSM/JavaProjects/csm_server/dist/csm-go-linux-amd64
 
 # 2) Deploy artifact len server
 ./deploy-go-linux.sh root@csmbridge.net /root/la_server /Volumes/Datas/CSM/JavaProjects/csm_server/dist/csm-go-linux-amd64

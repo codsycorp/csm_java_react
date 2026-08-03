@@ -3,7 +3,6 @@ import React, { ReactNode, useState, useEffect, useRef, useMemo, useCallback } f
 import { theme, ConfigProvider, Menu, Drawer, Space, Button, Modal, Input } from "antd";
 import styles from "./websiteLayout.module.css";
 import WebsiteFooter from "./WebsiteFooter";
-import { Link } from "react-router";
 import { useLocation } from "react-router";
 import { useTranslation } from "react-i18next";
 import { usePreferencesStore, useAuthStore } from "#src/store";
@@ -396,24 +395,24 @@ export default function WebsiteLayoutInner({ children, selectedKey, menuItems, t
     key: item.key,
     icon: item.icon ? React.cloneElement(item.icon as React.ReactElement, { fill: "currentColor", color: "currentColor" }) : undefined,
     label: item.path ? (
-      <Link
-        to={item.path}
+      <a
+        href={item.path}
         onClick={() => updateBridgeContextByPath(item.path || item.key)}
         className={item.key === selectedKey ? `${styles.wuMenuLink} ${styles.wuMenuLinkActive}` : styles.wuMenuLink}
       >
         {item.label}
-      </Link>
+      </a>
     ) : item.label,
     children: item.children?.map(child => ({
       key: child.key,
       label: child.path ? (
-        <Link
-          to={child.path}
+        <a
+          href={child.path}
           onClick={() => updateBridgeContextByPath(child.path || child.key)}
           className={child.key === selectedKey ? `${styles.wuMenuLink} ${styles.wuMenuLinkActive}` : styles.wuMenuLink}
         >
           {child.label}
-        </Link>
+        </a>
       ) : child.label
     }))
   }));

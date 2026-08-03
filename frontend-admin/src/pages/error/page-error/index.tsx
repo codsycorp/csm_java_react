@@ -2,7 +2,6 @@ import type { FallbackProps } from "react-error-boundary";
 // https://undraw.co/search
 import BugFixing from "#src/assets/svg/undraw-bug-fixing.svg?react";
 import { Button, Typography } from "antd";
-import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 
 import { useNavigate } from "react-router";
@@ -24,10 +23,6 @@ export default function PageError({ error, resetErrorBoundary }: FallbackProps) 
 		resetErrorBoundary();
 		navigate(normalizeHomePath(VITE_BASE_HOME_PATH));
 	};
-
-	useEffect(() => {
-		document.title = "Sorry, Page error occurred!";
-	}, []);
 
 	return (
 		<div className="mt-10 mx-auto flex max-w-[400px] flex-col items-center justify-center gap-5">

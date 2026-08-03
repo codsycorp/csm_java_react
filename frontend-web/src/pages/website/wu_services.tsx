@@ -10,7 +10,7 @@ function getDefaultCategorySlug() {
 }
 
 import React, { useEffect, useState, useMemo, useRef, useCallback } from "react";
-import { useLocation, useNavigate } from "react-router";
+import { useLocation } from "react-router";
 import i18n from "i18next";
 import {
   Card,
@@ -499,7 +499,6 @@ const normalizeDisplayValue = (value: any, t: any) => {
 const WuServicesPage: React.FC = () => {
   const { t, i18n: i18nInstance } = useTranslation();
   const location = useLocation();
-  const navigate = useNavigate();
   const FIXED_PAGE_SIZE = 12; // Backend cố định page size, frontend không gửi take/pageSize
   const [activeTabKey, setActiveTabKey] = useState('');
   // Cleanup query params: backend cố định take=12 nên xoá take/pageSize khỏi URL để tránh hiểu nhầm client đang set
@@ -1568,14 +1567,14 @@ const WuServicesPage: React.FC = () => {
   useEffect(() => {
     if (slug && !isGroupRoute && !allCategories.some(c => c.key === slug) && !SPECIAL_MENU_SLUGS.has(slug)) {
       console.warn(`❌ Invalid category slug: ${slug}, redirecting to home`);
-      navigate("/", { replace: true });
+      window.location.replace("/");
     }
-  }, [slug, allCategories, isGroupRoute, navigate]);
+  }, [slug, allCategories, isGroupRoute]);
   
   // If on a group route, redirect to default service route
   useEffect(() => {
     if (isGroupRoute && allCategories.length > 0) {
-      if (slug === 'hop-tac-kinh-doanh') {
+      if (slug && SPECIAL_MENU_SLUGS.has(slug)) {
         return;
       }
       const defaultServiceSlug = allCategories[0].key;
@@ -1584,7 +1583,7 @@ const WuServicesPage: React.FC = () => {
         return;
       }
       console.log(`🔄 Redirecting group route /${slug} to default service: ${targetUrl}`);
-      window.location.href = targetUrl;
+      window.location.replace(targetUrl);
     }
   }, [isGroupRoute, slug, allCategories]);
   

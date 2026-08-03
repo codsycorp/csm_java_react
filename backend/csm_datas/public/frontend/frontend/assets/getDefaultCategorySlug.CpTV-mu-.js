@@ -1,1 +1,0 @@
-function _(){if("undefined"!=typeof window&&window.__SSR_WEBSITE_CATEGORIES__){const _=window.__SSR_WEBSITE_CATEGORIES__.find(_=>"object"==typeof _&&null!==_&&"is_group_slug_default"in _&&!0===_.is_group_slug_default);if(_&&_.slug)return _.slug}return"undefined"!=typeof window&&window.__SSR_DEFAULT_CATEGORY__?window.__SSR_DEFAULT_CATEGORY__:"phan-mem"}export{_ as g};

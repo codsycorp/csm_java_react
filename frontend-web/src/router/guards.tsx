@@ -1,6 +1,6 @@
 import { usePreferences } from "#src/hooks";
 import PageError from "#src/pages/error/page-error";
-import { isString, toggleHtmlClass } from "#src/utils";
+import { toggleHtmlClass } from "#src/utils";
 import { resolveDevFlag } from "#src/utils/dev-flag";
 import { useAuthStore, useUserStore } from "#src/store";
 
@@ -82,13 +82,7 @@ export function RouterGuards() {
 	}
 
 	/* document title */
-	/* ❌ DISABLED - Keep server-side rendered title for SEO (no duplicate title tags) */
-	// useEffect(() => {
-	// 	const currentRoute = matches[matches.length - 1];
-	// 	const documentTitle = currentRoute.handle?.title as React.ReactElement | string;
-	// 	const newTitle = isString(documentTitle) ? documentTitle : documentTitle?.props?.children;
-	// 	document.title = t(newTitle) || document.title;
-	// }, [language, location]);
+	/* Keep server-side rendered title for SEO (no duplicate client-side rewrite) */
 
 	return (
 		<ErrorBoundary FallbackComponent={PageError}>

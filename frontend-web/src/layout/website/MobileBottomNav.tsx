@@ -7,7 +7,6 @@ import { LoginOutlined, UserOutlined, SettingOutlined } from "@ant-design/icons"
 import { Preferences } from "#src/layout/widgets/preferences";
 import { Dropdown, Button } from "antd";
 import { useTranslation } from "react-i18next";
-import { Link } from "react-router";
 
 interface MobileBottomNavProps {
   selectedKey?: string;
@@ -44,13 +43,13 @@ export default function MobileBottomNav({ selectedKey }: MobileBottomNavProps) {
     <nav className={styles.mobileBottomNav}>
       {parentMenuItems.map(item => {
         const isActive = selectedKey === item.path || item.children?.some((child: { path?: string }) => child.path === selectedKey);
-        return <Link
+        return <a
           key={item.key}
-          to={item.path}
+          href={item.path}
           className={`${styles.mobileBottomNavItem} ${isActive ? styles.mobileBottomNavItemActive : ''}`}
         >
           <span className={styles.mobileBottomNavIcon}>{item.icon}</span>
-        </Link>
+        </a>
       })}
       {/* Thêm nút cài đặt hệ thống */}
       <div className={`${styles.mobileBottomNavItem} ${isSettingsActive ? styles.mobileBottomNavItemActive : ''}`}>
@@ -69,14 +68,14 @@ export default function MobileBottomNav({ selectedKey }: MobileBottomNavProps) {
           </div>
         </Dropdown>
       ) : (
-        <Link
-          to="/login"
+        <a
+          href="/login"
           className={styles.mobileBottomNavItem}
         >
           <span className={styles.mobileBottomNavIcon}>
             <LoginOutlined />
           </span>
-        </Link>
+        </a>
       )}
     </nav>
   );
