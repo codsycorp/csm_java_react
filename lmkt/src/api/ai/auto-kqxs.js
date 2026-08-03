@@ -590,7 +590,8 @@
       lgKttLegendB: "B – Đài Bắc",
       lgKttLegendMatch: "▲ Trùng Số Dự Đoán",
       lgKttLegendDo3NamBac: "▲ 3 Nam trúng Bắc (D+P+T→B)",
-      lgKttBtnDo3NamBac: "Dò 3 Nam dò xuống Bắc",
+      lgKttBtnDo3NamBac: "Lấy KQ 3 Nam",
+      lgKttBtnDoBacNamHomSau: "Lấy KQ Bắc",
       lgKttFieldDdau: "D đầu (Đài Chính)",
       lgKttFieldDduoi: "D đuôi (Đài Chính)",
       lgKttFieldPdau: "P đầu (Đài Phụ)",
@@ -856,7 +857,8 @@
       lgKttLegendB: "B – North Station",
       lgKttLegendMatch: "▲ Matches Prediction",
       lgKttLegendDo3NamBac: "▲ 3 South hits North (D+P+T→B)",
-      lgKttBtnDo3NamBac: "Scan 3 South → North",
+      lgKttBtnDo3NamBac: "Get 3 South Results",
+      lgKttBtnDoBacNamHomSau: "Get North Results",
       lgKttFieldDdau: "D Head (Main Station)",
       lgKttFieldDduoi: "D Tail (Main Station)",
       lgKttFieldPdau: "P Head (Sub Station)",
@@ -1122,7 +1124,8 @@
       lgKttLegendB: "B – 北台",
       lgKttLegendMatch: "▲ 匹配预测号码",
       lgKttLegendDo3NamBac: "▲ 南3台中北 (D+P+T→B)",
-      lgKttBtnDo3NamBac: "查南3台至北",
+      lgKttBtnDo3NamBac: "取南3台结果",
+      lgKttBtnDoBacNamHomSau: "取北台结果",
       lgKttFieldDdau: "D 头位（主台）",
       lgKttFieldDduoi: "D 尾位（主台）",
       lgKttFieldPdau: "P 头位（副台）",
@@ -1304,6 +1307,7 @@
 
   function dateFormat(dateObj, fmt) {
     var d = new Date(dateObj);
+    if (!d || isNaN(d.getTime())) return "";
     var dd = String(d.getDate()).padStart(2, "0");
     var mm = String(d.getMonth() + 1).padStart(2, "0");
     var yyyy = String(d.getFullYear());
@@ -3747,6 +3751,8 @@
     var _ax2 = useState(false), legacyKttHasSearchInput = _ax2[0], setLegacyKttHasSearchInput = _ax2[1];
     var _ax3 = useState({}), legacyKttDo3NamBacHitMap = _ax3[0], setLegacyKttDo3NamBacHitMap = _ax3[1];
     var _ax4 = useState(false), legacyKttDo3NamBacActive = _ax4[0], setLegacyKttDo3NamBacActive = _ax4[1];
+    var _ax5 = useState({}), legacyKttDoBacNamHomSauHitMap = _ax5[0], setLegacyKttDoBacNamHomSauHitMap = _ax5[1];
+    var _ax6 = useState(false), legacyKttDoBacNamHomSauActive = _ax6[0], setLegacyKttDoBacNamHomSauActive = _ax6[1];
     var _at = useState([]), legacySlrRows = _at[0], setLegacySlrRows = _at[1];
     var _atb = useState([]), legacySlrWeekRows = _atb[0], setLegacySlrWeekRows = _atb[1];
     var _au = useState([]), legacyNbRows = _au[0], setLegacyNbRows = _au[1];
@@ -3839,6 +3845,8 @@
     var dataFetchIntegrityRef = useRef({ incomplete: false, reason: "" });
     var filterResetReadyRef = useRef(false);
     var autoDailyUpdatingRef = useRef(false);
+    var autoDailyUpdateStartedRef = useRef(false);
+    var autoDailyUpdateServerCheckCacheRef = useRef({});
     var legacyThAutoStopRef = useRef(false);
 
     var legacyNbResizableComponents = useMemo(function() {
@@ -5230,6 +5238,110 @@
       };
     }, [du_lieu_dai_mien, mien, tu_ngay, den_ngay]);
 
+    function getAutoDailyUpdateTableNamesForRegion(mienCode) {
+      var regionKey = String(mienCode || "").toUpperCase();
+      var seen = {};
+      return (Array.isArray(danh_sach_dai) ? danh_sach_dai : []).filter(function (item) {
+        return String((item && item.mien) || "").toUpperCase() === regionKey;
+      }).map(function (item) {
+        return String((item && item.du_lieu_dai) || resolveStationObjectName(item && item.ten_dai || "", regionKey) || "").trim();
+      }).filter(function (tableName) {
+        if (!tableName || seen[tableName]) return false;
+        seen[tableName] = true;
+        return true;
+      });
+    }
+
+    function getAutoDailyUpdateStationsForDate(targetDate) {
+      var targetThu = days[chuyenNgay(targetDate, "dd/mm/yyyy").getDay()];
+      var seen = {};
+      return (Array.isArray(danh_sach_dai) ? danh_sach_dai : []).filter(function (item) {
+        return String((item && item.thu) || "") === String(targetThu || "");
+      }).map(function (item) {
+        var regionKey = String((item && item.mien) || "").toUpperCase();
+        return {
+          mien: regionKey,
+          thu: String(item && item.thu || ""),
+          stt: String(item && item.stt || ""),
+          ten_dai: String(item && item.ten_dai || ""),
+          tableName: String((item && item.du_lieu_dai) || resolveStationObjectName(item && item.ten_dai || "", regionKey) || "").trim()
+        };
+      }).filter(function (item) {
+        var key = [item.mien, item.thu, item.stt, item.tableName].join("#");
+        if (!item.tableName || seen[key]) return false;
+        seen[key] = true;
+        return true;
+      });
+    }
+
+    async function hasAutoDailyUpdateDataForRegionDate(mienCode, targetDate) {
+      var targetYmd = normalizeLegacyDateYmd(dateFormat(targetDate, "yyyymmdd"));
+      if (!targetYmd) return false;
+
+      var tableNames = getAutoDailyUpdateTableNamesForRegion(mienCode);
+      if (!tableNames.length) return false;
+
+      for (var i = 0; i < tableNames.length; i += 1) {
+        var tableName = tableNames[i];
+        var rows = await fetchRows({
+          app_id: "kqxs",
+          obj_name: tableName,
+          e_where: { field: "field_ngay", type: "eq", value: targetYmd }
+        });
+        if (!Array.isArray(rows) || !rows.length) return false;
+      }
+
+      return true;
+    }
+
+    async function hasAutoDailyUpdateStationData(tableName, targetYmd) {
+      var key = String(tableName || "") + "::" + String(targetYmd || "");
+      if (autoDailyUpdateServerCheckCacheRef.current.hasOwnProperty(key)) {
+        return !!autoDailyUpdateServerCheckCacheRef.current[key];
+      }
+      if (!tableName || !targetYmd) return false;
+
+      var rows = await fetchRows({
+        app_id: "kqxs",
+        obj_name: tableName,
+        e_where: { field: "field_ngay", type: "eq", value: targetYmd }
+      });
+      var exists = Array.isArray(rows) && rows.length > 0;
+      autoDailyUpdateServerCheckCacheRef.current[key] = exists;
+      return exists;
+    }
+
+    async function getAutoDailyUpdateMissingDays(daysToUpdate) {
+      var missingDays = [];
+      var now = new Date();
+      var nowMinutes = now.getHours() * 60 + now.getMinutes();
+      var todayCutoffMinutes = 16 * 60 + 30;
+      for (var i = 0; i < daysToUpdate; i += 1) {
+        var targetDate = new Date();
+        targetDate.setDate(targetDate.getDate() - i);
+        var targetYmd = dateFormat(targetDate, "yyyymmdd");
+
+        if (i === 0 && nowMinutes < todayCutoffMinutes) {
+          continue;
+        }
+
+        var stationsForDate = getAutoDailyUpdateStationsForDate(targetDate);
+        var hasMissingStation = false;
+        for (var si = 0; si < stationsForDate.length; si += 1) {
+          var station = stationsForDate[si];
+          if (!station || !station.tableName) continue;
+          var exists = await hasAutoDailyUpdateStationData(station.tableName, targetYmd);
+          if (!exists) {
+            hasMissingStation = true;
+            break;
+          }
+        }
+
+        if (hasMissingStation) missingDays.push(targetDate);
+      }
+      return missingDays;
+    }
+
 
     useEffect(function () {
 
@@ -5237,12 +5349,23 @@
       var autoEnabled = (typeof autoCfg.enabled === "boolean") ? autoCfg.enabled : true;
       if (!autoEnabled || KQXS_VIEW_ONLY) return;
 
+      if (autoDailyUpdateStartedRef.current) return;
+      if (!Array.isArray(danh_sach_dai) || !danh_sach_dai.length) return;
       if (autoDailyUpdatingRef.current) return;
-      autoDailyUpdatingRef.current = true;
+      autoDailyUpdateServerCheckCacheRef.current = {};
 
       var delayMs = Math.max(0, Number(autoCfg.delayMs || 1800));
       var timer = setTimeout(async function () {
         try {
+          autoDailyUpdateStartedRef.current = true;
+          autoDailyUpdatingRef.current = true;
+          var daysToUpdate = Math.max(1, Number(autoCfg.daysToUpdateOnLogin || 3) || 3);
+          var missingDays = await getAutoDailyUpdateMissingDays(daysToUpdate);
+          if (!missingDays.length) {
+            thongbao("Đã có sẵn dữ liệu cho 3 ngày gần nhất, không cần cập nhật lại.");
+            return;
+          }
+
           // Nếu autoCfg có tmproxyApiKey: tự lấy proxy TMProxy trước khi gọi cap_nhat
           var autoTmproxyApiKey = String(autoCfg.tmproxyApiKey || autoCfg.api_key || "").trim();
           var autoTmproxyLocationId = Number(autoCfg.tmproxyLocationId || autoCfg.id_location || 0);
@@ -5262,15 +5385,17 @@
               console.error("[Auto TMProxy] Lỗi lấy proxy:", tmErr.message);
             }
           }
-          var daysToUpdate = Math.max(1, Number(autoCfg.daysToUpdateOnLogin || 3) || 3);
           var updatedDays = [];
+          var skippedDays = [];
+          window.__kqxsAutoDailyUpdateActive = true;
 
-          for (var i = 0; i < daysToUpdate; i += 1) {
-            var targetDate = new Date();
-            targetDate.setDate(targetDate.getDate() - i);
+          for (var i = 0; i < missingDays.length; i += 1) {
+            var targetDate = missingDays[i];
+            var targetDateLabel = dateFormat(targetDate, "dd/mm/yyyy");
             var ok = await cap_nhat(targetDate);
-            if (ok) updatedDays.push(dateFormat(targetDate, "dd/mm/yyyy"));
-            if (i < daysToUpdate - 1) {
+            if (ok) updatedDays.push(targetDateLabel);
+            else skippedDays.push(targetDateLabel);
+            if (i < missingDays.length - 1) {
               await sleepMs(Math.max(0, Number(autoCfg.perDayDelayMs || 1200)));
             }
           }
@@ -5278,18 +5403,25 @@
           if (updatedDays.length > 0) {
             thongbao("Đã tự động cập nhật kết quả cho " + updatedDays.length + " ngày: " + updatedDays.join(", "));
           }
+          if (skippedDays.length > 0 && updatedDays.length === 0) {
+            thongbao("Đã có sẵn dữ liệu cho " + skippedDays.length + " ngày, bỏ qua: " + skippedDays.join(", "));
+          }
         } catch (err) {
           console.error("Auto daily update failed", err);
         } finally {
+          window.__kqxsAutoDailyUpdateActive = false;
           autoDailyUpdatingRef.current = false;
+          autoDailyUpdateStartedRef.current = false;
         }
       }, delayMs);
 
       return function () {
         clearTimeout(timer);
+        window.__kqxsAutoDailyUpdateActive = false;
         autoDailyUpdatingRef.current = false;
+        autoDailyUpdateStartedRef.current = false;
       };
-    }, []);
+    }, [danh_sach_dai]);
 
     function locVaSapXepNgay(rows) {
       // Vue parity: sort giảm dần theo ngày trước, sau đó dedup để giữ bản ghi đầu tiên của mỗi ngày.
@@ -5507,6 +5639,17 @@
       return s.replace(/\D/g, "").slice(0, 8);
     }
 
+    function legacyKttAddDaysYmd(ymd, offsetDays) {
+      var key = normalizeLegacyDateYmd(ymd);
+      var step = Number(offsetDays || 0);
+      if (!key || !/^\d{8}$/.test(key) || !isFinite(step)) return "";
+      var parsed = chuyenNgay(key, "yyyymmdd");
+      if (!parsed || isNaN(parsed.getTime())) return "";
+      // Avoid locale-dependent parsing of dd/mm strings; operate directly on Date.
+      var next = new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate() + step);
+      return dateFormat(next, "yyyymmdd");
+    }
+
     function buildLegacyDateTimeline(fromDate, toDate, stepDays) {
       var fromYmd = normalizeLegacyDateYmd(fromDate);
       var toYmd = normalizeLegacyDateYmd(toDate);
@@ -5611,38 +5754,60 @@
       return key;
     }
 
-    function getLegacyKttNamFields(row, heThong, queryValue) {
+    function getLegacyKttNamFields(row, heThong) {
       var rec = row || {};
       var he = Number(heThong || 2) === 3 ? 3 : 2;
-      var queryFields = getLegacyQueryFieldList(queryValue, he);
+      var baseFields = he === 3
+        ? ["D_dau", "D_duoi", "P_dau", "P_duoi", "T_dau", "T_duoi"]
+        : ["D_dau", "D_duoi", "P_dau", "P_duoi", "T_dau", "T_duoi"];
       var out = [];
       var seen = {};
 
-      // Primary source: query-specific fields for the selected HeThong.
-      for (var i = 0; i < queryFields.length; i += 1) {
-        var qKey = String(queryFields[i] || "");
-        if (!/^[DPT]_/.test(qKey)) continue;
-        var displayKey = normalizeLegacyKttDisplayField(qKey, he);
-        var qRaw = String(rec[qKey] || rec[displayKey] || "").trim();
-        if (!qRaw || qRaw === "?") continue;
-        if (!seen[displayKey]) {
-          seen[displayKey] = true;
-          out.push(displayKey);
+      for (var i = 0; i < baseFields.length; i += 1) {
+        var key = baseFields[i];
+        var raw = String(rec[key] || "").trim();
+        if (!raw || raw === "?") continue;
+        if (!seen[key]) {
+          seen[key] = true;
+          out.push(key);
         }
       }
-      if (out.length) return out;
+      return out;
+    }
 
-      // Fallback: when query metadata is missing, still respect the row's available D/P/T fields.
-      var allKeys = getLegacyAllNormalizedFieldKeys();
-      for (var j = 0; j < allKeys.length; j += 1) {
-        var key = String(allKeys[j] || "");
-        if (!/^[DPT]_/.test(key)) continue;
-        var displayFallbackKey = normalizeLegacyKttDisplayField(key, he);
-        var raw = String(rec[key] || rec[displayFallbackKey] || "").trim();
+    function getLegacyKttSouthTargetFields(row, heThong) {
+      var rec = row || {};
+      var baseFields = ["D_dau", "D_duoi", "P_dau", "P_duoi", "T_dau", "T_duoi"];
+      var out = [];
+      var seen = {};
+
+      for (var i = 0; i < baseFields.length; i += 1) {
+        var key = baseFields[i];
+        var raw = String(rec[key] || "").trim();
         if (!raw || raw === "?") continue;
-        if (!seen[displayFallbackKey]) {
-          seen[displayFallbackKey] = true;
-          out.push(displayFallbackKey);
+        if (!seen[key]) {
+          seen[key] = true;
+          out.push(key);
+        }
+      }
+      return out;
+    }
+
+    function getLegacyKttBacSourceFields(row, heThong) {
+      var rec = row || {};
+      var he = Number(heThong || 2) === 3 ? 3 : 2;
+      var baseFields = he === 3
+        ? ["B_dau", "B_so2", "B_so3"]
+        : ["B_dau", "B_so2", "B_so3", "B_so4", "B_duoi"];
+      var out = [];
+      var seen = {};
+      for (var i = 0; i < baseFields.length; i += 1) {
+        var key = baseFields[i];
+        var raw = String(rec[key] || "").trim();
+        if (!raw || raw === "?") continue;
+        if (!seen[key]) {
+          seen[key] = true;
+          out.push(key);
         }
       }
       return out;
@@ -5682,8 +5847,89 @@
       var v = String(val || "").trim();
       if (!v || v === "?") return "";
       var he = Number(heThong || 2) === 3 ? 3 : 2;
-      var tail = v.slice(-he);
-      return new RegExp("^\\d{" + he + "}$").test(tail) ? tail : "";
+      var token = v.slice(-he);
+      return new RegExp("^\\d{" + he + "}$").test(token) ? token : "";
+    }
+
+    function getLegacyKttHeadToken(val, heThong) {
+      var v = String(val || "").trim();
+      if (!v || v === "?") return "";
+      var he = Number(heThong || 2) === 3 ? 3 : 2;
+      var token = v.slice(0, he);
+      return new RegExp("^\\d{" + he + "}$").test(token) ? token : "";
+    }
+
+    function getLegacyKttTailToken2(val) {
+      var v = String(val || "").trim();
+      if (!v || v === "?") return "";
+      var token = v.slice(-2);
+      return /^\d{2}$/.test(token) ? token : "";
+    }
+
+    function getLegacyKttCrossDayToken(val, fieldName, heThong) {
+      var field = String(fieldName || "").trim();
+      var he = Number(heThong || 2) === 3 ? 3 : 2;
+      if (!field) return getLegacyKttFieldToken(val, he);
+      if (/_duoi$/.test(field)) return getLegacyKttTailToken2(val);
+      if (/_dau$/.test(field)) {
+        // He 3 quy ước dau đã map từ field_so2/field_so5, nên lấy token theo he.
+        if (he === 3) return getLegacyKttFieldToken(val, he);
+        return getLegacyKttHeadToken(val, he);
+      }
+      return getLegacyKttFieldToken(val, he);
+    }
+
+    function getLegacyKttCrossDayTokenList(val, fieldName, heThong) {
+      var field = String(fieldName || "").trim();
+      var he = Number(heThong || 2) === 3 ? 3 : 2;
+      var tokenLen = /_duoi$/.test(field) ? 2 : (he === 3 ? 3 : 2);
+      var text = String(val || "").trim();
+      if (!text || text === "?" || tokenLen <= 0) return [];
+
+      var groups = text.match(/\d+/g) || [];
+      var rawTokens = [];
+      for (var gi = 0; gi < groups.length; gi += 1) {
+        var grp = String(groups[gi] || "").trim();
+        if (!grp) continue;
+        // Keep He-2/He-3 dau conventions explicit to avoid false highlights.
+        if (/_duoi$/.test(field)) {
+          rawTokens.push(grp.length < 2 ? grp.padStart(2, "0") : grp.slice(-2));
+          continue;
+        }
+        if (/_dau$/.test(field)) {
+          if (he === 3) {
+            rawTokens.push(grp.length < 3 ? grp.padStart(3, "0") : grp.slice(-3));
+          } else {
+            rawTokens.push(grp.length < 2 ? grp.padStart(2, "0") : grp.slice(0, 2));
+          }
+          continue;
+        }
+        if (grp.length < tokenLen) {
+          rawTokens.push(grp.padStart(tokenLen, "0"));
+          continue;
+        }
+        if (grp.length === tokenLen) {
+          rawTokens.push(grp);
+          continue;
+        }
+        // For non-dau fields, split long groups so "0507" can still produce "05", "07".
+        for (var si = 0; si + tokenLen <= grp.length; si += tokenLen) {
+          rawTokens.push(grp.slice(si, si + tokenLen));
+        }
+      }
+      var out = [];
+      var seen = {};
+      for (var i = 0; i < rawTokens.length; i += 1) {
+        var tk = String(rawTokens[i] || "").trim();
+        if (!tk || seen[tk]) continue;
+        seen[tk] = true;
+        out.push(tk);
+      }
+      if (!out.length) {
+        var fallback = getLegacyKttCrossDayToken(text, field, he);
+        if (fallback) out.push(fallback);
+      }
+      return out;
     }
 
     function buildLegacyKttDo3NamBacHitMap(rows, heThong, queryValue) {
@@ -5693,7 +5939,7 @@
         var row = list[i] || {};
         var ymd = normalizeLegacyDateYmd(row.ID);
         if (!ymd) continue;
-        var namFields = getLegacyKttNamFields(row, heThong, queryValue);
+        var namFields = getLegacyKttNamFields(row, heThong);
         if (!namFields.length) continue;
         var bacFields = getLegacyKttBacFields(row, heThong, queryValue);
         if (!bacFields.length) continue;
@@ -5702,7 +5948,7 @@
         var namTokenToFields = {};
         for (var ni = 0; ni < namFields.length; ni += 1) {
           var namField = String(namFields[ni] || "");
-          var namToken = getLegacyKttFieldToken(row[namField], heThong);
+          var namToken = getLegacyKttFieldToken(row[namField], heThong, namField);
           if (namToken) {
             namTokenSet[namToken] = true;
             if (!namTokenToFields[namToken]) namTokenToFields[namToken] = {};
@@ -5727,6 +5973,186 @@
         if (anyHit) out[ymd] = dayHits;
       }
       return out;
+    }
+
+    function buildLegacyKttDoBacNamHomSauHitMap(rows, heThong, queryValue) {
+      var out = {};
+      var list = Array.isArray(rows) ? rows : [];
+      var rowByYmd = {};
+      for (var ri = 0; ri < list.length; ri += 1) {
+        var rr = list[ri] || {};
+        var rYmd = normalizeLegacyDateYmd(rr.ID);
+        if (rYmd) rowByYmd[rYmd] = rr;
+      }
+
+      var he = Number(heThong || 2) === 3 ? 3 : 2;
+      var southFieldOrder = he === 3
+        ? ["D_dau", "P_dau", "T_dau"]
+        : ["D_dau", "D_duoi", "P_dau", "P_duoi", "T_dau", "T_duoi"];
+
+
+      function getCellDisplayTokenList(rawVal, fieldName, he) {
+        return getLegacyKttCrossDayTokenList(rawVal, fieldName, he);
+      }
+
+      for (var i = 0; i < list.length; i += 1) {
+        var northRow = list[i] || {};
+        var northYmd = normalizeLegacyDateYmd(northRow.ID);
+        if (!northYmd) continue;
+
+        var southYmd = legacyKttAddDaysYmd(northYmd, 1);
+        var southRow = southYmd ? rowByYmd[southYmd] : null;
+        if (!southRow) continue;
+
+        var northFieldOrder = getLegacyKttBacSourceFields(northRow, heThong);
+        if (!northFieldOrder.length) continue;
+
+        var northTokenToFields = {};
+        for (var nfi = 0; nfi < northFieldOrder.length; nfi += 1) {
+          var northField = String(northFieldOrder[nfi] || "");
+          var northTokenList = getCellDisplayTokenList(northRow[northField], northField, heThong);
+          for (var nti = 0; nti < northTokenList.length; nti += 1) {
+            var northToken = String(northTokenList[nti] || "");
+            if (!northToken) continue;
+            if (!northTokenToFields[northToken]) northTokenToFields[northToken] = {};
+            northTokenToFields[northToken][northField] = true;
+          }
+        }
+        if (!Object.keys(northTokenToFields).length) continue;
+
+        var northHits = {};
+        var southHits = {};
+        var anyHit = false;
+
+        for (var sidx = 0; sidx < southFieldOrder.length; sidx += 1) {
+          var southField = southFieldOrder[sidx];
+          var southTokenList = getCellDisplayTokenList(southRow[southField], southField, heThong);
+          var hitToken = "";
+          var matchedTokenSet = {};
+          var matchedTokens = [];
+          for (var sti = 0; sti < southTokenList.length; sti += 1) {
+            var candidateToken = String(southTokenList[sti] || "");
+            if (candidateToken && northTokenToFields[candidateToken]) {
+              if (!matchedTokenSet[candidateToken]) {
+                matchedTokenSet[candidateToken] = true;
+                matchedTokens.push(candidateToken);
+              }
+            }
+          }
+          if (!matchedTokens.length) continue;
+          hitToken = matchedTokens[0];
+
+          // Color identity follows the exact hit number.
+          southHits[southField] = hitToken;
+          southHits[normalizeLegacyKttDisplayField(southField, heThong)] = hitToken;
+
+          for (var mti = 0; mti < matchedTokens.length; mti += 1) {
+            var matchedToken = matchedTokens[mti];
+            var linkedNorthFields = northTokenToFields[matchedToken] || {};
+            Object.keys(linkedNorthFields).forEach(function (nf) {
+              northHits[nf] = matchedToken;
+              northHits[normalizeLegacyKttDisplayField(nf, heThong)] = matchedToken;
+            });
+          }
+
+          anyHit = true;
+        }
+
+        if (anyHit) {
+          if (Object.keys(northHits).length) {
+            out[northYmd] = Object.assign({}, out[northYmd] || {}, northHits);
+          }
+          if (Object.keys(southHits).length) {
+            out[southYmd] = Object.assign({}, out[southYmd] || {}, southHits);
+          }
+        }
+      }
+
+      return out;
+    }
+
+    function buildLegacyKttDoBacNamHomSauDebugReport(rows, heThong) {
+      var list = Array.isArray(rows) ? rows : [];
+      var rowByYmd = {};
+      for (var ri = 0; ri < list.length; ri += 1) {
+        var rr = list[ri] || {};
+        var rYmd = normalizeLegacyDateYmd(rr.ID);
+        if (rYmd) rowByYmd[rYmd] = rr;
+      }
+
+      var he = Number(heThong || 2) === 3 ? 3 : 2;
+      var southFieldOrder = he === 3
+        ? ["D_dau", "P_dau", "T_dau"]
+        : ["D_dau", "D_duoi", "P_dau", "P_duoi", "T_dau", "T_duoi"];
+
+
+      function getCellDisplayTokenList(rawVal, fieldName, he) {
+        return getLegacyKttCrossDayTokenList(rawVal, fieldName, he);
+      }
+
+      var report = [];
+      for (var i = 0; i < list.length; i += 1) {
+        var northRow = list[i] || {};
+        var northYmd = normalizeLegacyDateYmd(northRow.ID);
+        if (!northYmd) continue;
+
+        var southYmd = legacyKttAddDaysYmd(northYmd, 1);
+        var southRow = southYmd ? rowByYmd[southYmd] : null;
+
+        var northFieldOrder = getLegacyKttBacSourceFields(northRow, heThong);
+        var northTokens = {};
+        var northTokenLists = {};
+        for (var nfi = 0; nfi < northFieldOrder.length; nfi += 1) {
+          var nf = String(northFieldOrder[nfi] || "");
+          var ntList = getCellDisplayTokenList(northRow[nf], nf, heThong);
+          northTokenLists[nf] = ntList;
+          northTokens[nf] = ntList.length ? ntList[0] : "";
+        }
+
+        var southTokens = {};
+        var southTokenLists = {};
+        var matches = [];
+        var matchSeen = {};
+        if (southRow) {
+          for (var sfi = 0; sfi < southFieldOrder.length; sfi += 1) {
+            var sf = String(southFieldOrder[sfi] || "");
+            var stList = getCellDisplayTokenList(southRow[sf], sf, heThong);
+            southTokenLists[sf] = stList;
+            southTokens[sf] = stList.length ? stList[0] : "";
+            if (!stList.length) continue;
+            for (var sti = 0; sti < stList.length; sti += 1) {
+              var st = String(stList[sti] || "");
+              if (!st) continue;
+              if (northTokenLists.B_dau && northTokenLists.B_dau.indexOf(st) >= 0) {
+                var keyD = "B_dau|" + sf + "|" + st;
+                if (!matchSeen[keyD]) {
+                  matchSeen[keyD] = true;
+                  matches.push({ token: st, from: "B_dau", to: sf });
+                }
+              }
+              if (northTokenLists.B_duoi && northTokenLists.B_duoi.indexOf(st) >= 0) {
+                var keyU = "B_duoi|" + sf + "|" + st;
+                if (!matchSeen[keyU]) {
+                  matchSeen[keyU] = true;
+                  matches.push({ token: st, from: "B_duoi", to: sf });
+                }
+              }
+            }
+          }
+        }
+
+        report.push({
+          northDate: northYmd,
+          southDate: southYmd,
+          hasSouthDate: !!southRow,
+          northTokens: northTokens,
+          northTokenLists: northTokenLists,
+          southTokens: southTokens,
+          southTokenLists: southTokenLists,
+          matches: matches
+        });
+      }
+      return report;
     }
 
     function buildLegacySoLauRaViewModel(opts) {
@@ -8090,6 +8516,10 @@
         var data = Object.assign({}, objKQ);
         data.id = tableName + "_" + String(data.field_ngay || "").trim();
         data.thu = days[chuyenNgay(String(data.field_ngay || ""), "yyyymmdd").getDay()];
+        if (window.__kqxsAutoDailyUpdateActive === true) {
+          var alreadyExists = await hasAutoDailyUpdateStationData(tableName, String(data.field_ngay || "").trim());
+          if (alreadyExists) return;
+        }
         var whereByNgay = { field: "field_ngay", type: "eq", value: data.field_ngay };
         var updateRs = await updateRows({
           app_id: "kqxs",
@@ -8530,6 +8960,14 @@
         canhbao("Không có dữ liệu để kiểm tra tổng hợp");
         return null;
       }
+      var rowsFull = buildLegacyTongHopViewModel({
+        dataMien: dataMien,
+        fromDate: tu_ngay,
+        toDate: den_ngay,
+        heThong: legacyHeThong,
+        locList: [],
+        stepDays: 1
+      });
       var locList = getLegacyLocList();
       var rows = buildLegacyTongHopViewModel({
         dataMien: dataMien,
@@ -8621,6 +9059,7 @@
         }
       }
       return {
+        rowsFull: rowsFull,
         rows: rows,
         matchSet: matchSet,
         clickLookup: clickLookup,
@@ -8648,6 +9087,8 @@
       setLegacyKttHasSearchInput(false);
       setLegacyKttDo3NamBacHitMap({});
       setLegacyKttDo3NamBacActive(false);
+      setLegacyKttDoBacNamHomSauHitMap({});
+      setLegacyKttDoBacNamHomSauActive(false);
       try {
         var payload = await fetchLegacyKttViewModelPayload();
         if (!payload) return;
@@ -8670,6 +9111,8 @@
         if (!payload) return;
         var hitMap = buildLegacyKttDo3NamBacHitMap(payload.rows, legacyHeThong, payload.queryValue);
         applyLegacyKttViewPayload(payload);
+        setLegacyKttDoBacNamHomSauHitMap({});
+        setLegacyKttDoBacNamHomSauActive(false);
         setLegacyKttDo3NamBacHitMap(hitMap);
         setLegacyKttDo3NamBacActive(true);
         setProgress(100);
@@ -8679,6 +9122,32 @@
       } catch (e) {
         console.error(e);
         canhbao("Không thể chạy Dò 3 Nam dò xuống Bắc");
+      } finally {
+        setLoading(false);
+        setTimeout(function () { setProgress(0); }, 600);
+      }
+    }
+
+    async function runLegacyKttDoBacNamHomSau(silent) {
+      setLoading(true);
+      setProgress(15);
+      try {
+        var payload = await fetchLegacyKttViewModelPayload();
+        if (!payload) return;
+        var sourceRows = (payload.rowsFull && payload.rowsFull.length) ? payload.rowsFull : payload.rows;
+        var hitMap = buildLegacyKttDoBacNamHomSauHitMap(sourceRows, legacyHeThong, payload.queryValue);
+        applyLegacyKttViewPayload(payload);
+        setLegacyKttDo3NamBacHitMap({});
+        setLegacyKttDo3NamBacActive(false);
+        setLegacyKttDoBacNamHomSauHitMap(hitMap);
+        setLegacyKttDoBacNamHomSauActive(true);
+        setProgress(100);
+        if (!silent && !Object.keys(hitMap).length) {
+          canhbao("Không có ngày nào Bắc hôm nay trúng các trường Nam của ngày hôm sau trong khoảng đã chọn");
+        }
+      } catch (e) {
+        console.error(e);
+        canhbao("Không thể chạy Dò Bắc dò Nam hôm sau: " + String((e && e.message) || e || "unknown"));
       } finally {
         setLoading(false);
         setTimeout(function () { setProgress(0); }, 600);
@@ -9842,9 +10311,63 @@
     var kttMatchBg  = theme.isDark ? "rgba(255,80,80,0.28)" : "#ffcccc";
     var kttMatchClr = theme.isDark ? "#ff8080" : "#cc0000";
     var kttNormalClr = theme.text;
+    var kttInversePendingBg = theme.isDark ? "rgba(255,255,255,0.08)" : "#F4F6F8";
     var kttRowBorder = "1px solid " + (theme.isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.07)");
     var KTT_CARD_WIDTH = 156;
     var KTT_CELL_HEIGHT = 26;
+    var KTT_PAIR_COLORS = theme.isDark
+      ? ["rgba(244,67,54,0.30)", "rgba(156,39,176,0.26)", "rgba(33,150,243,0.26)", "rgba(76,175,80,0.26)", "rgba(255,152,0,0.26)", "rgba(0,188,212,0.26)", "rgba(255,193,7,0.26)", "rgba(121,85,72,0.26)", "rgba(63,81,181,0.26)", "rgba(139,195,74,0.26)", "rgba(255,87,34,0.26)", "rgba(96,125,139,0.26)"]
+      : ["#FFD6D6", "#E8D8FF", "#DDEEFF", "#DDF3E3", "#FFE8CC", "#D9F5F7", "#FFF2CC", "#EDE1D8", "#D7DCF9", "#E2F2D7", "#FFE1D6", "#DCE6EB"];
+
+    var legacyKttInversePairColorMap = useMemo(function () {
+      if (!legacyKttDoBacNamHomSauActive) return {};
+      var hitMap = legacyKttDoBacNamHomSauHitMap || {};
+      var pairSet = {};
+      Object.keys(hitMap).sort().forEach(function (ymd) {
+        var dayHits = hitMap[ymd] || {};
+        Object.keys(dayHits).forEach(function (fieldKey) {
+          var pairKey = String(dayHits[fieldKey] || "").trim();
+          if (pairKey) pairSet[pairKey] = true;
+        });
+      });
+      var orderedPairs = Object.keys(pairSet).sort();
+      var out = {};
+      for (var i = 0; i < orderedPairs.length; i += 1) {
+        out[orderedPairs[i]] = KTT_PAIR_COLORS[i % KTT_PAIR_COLORS.length];
+      }
+      return out;
+    }, [legacyKttDoBacNamHomSauActive, legacyKttDoBacNamHomSauHitMap, KTT_PAIR_COLORS]);
+
+    var legacyKttDoBacNamHomSauEffectiveHitMap = useMemo(function () {
+      if (!legacyKttDoBacNamHomSauActive) return {};
+      return legacyKttDoBacNamHomSauHitMap || {};
+    }, [legacyKttDoBacNamHomSauActive, legacyKttDoBacNamHomSauHitMap]);
+
+    function legacyKttHashString(text) {
+      var s = String(text || "");
+      var hash = 0;
+      for (var i = 0; i < s.length; i += 1) {
+        hash = ((hash << 5) - hash) + s.charCodeAt(i);
+        hash |= 0;
+      }
+      return Math.abs(hash);
+    }
+
+    function legacyKttPairColor(hitKey) {
+      var key = String(hitKey || "").trim();
+      if (!key) return kttMatchBg;
+      if (legacyKttInversePairColorMap && legacyKttInversePairColorMap[key]) {
+        return legacyKttInversePairColorMap[key];
+      }
+      var idx = legacyKttHashString(key) % KTT_PAIR_COLORS.length;
+      return KTT_PAIR_COLORS[idx];
+    }
+
+    function legacyKttIsInverseDoField(fieldKey) {
+      var key = String(fieldKey || "").trim();
+      return /^(B_(dau|so2|so3|so4|duoi)|[DPT]_(dau|duoi))$/.test(key);
+    }
+
     function kttCellNode(val, bgColor, opts) {
       var tokenLen = legacyHeThong === 3 ? 3 : 2;
       var v = String(val || "");
@@ -9859,7 +10382,14 @@
       var hit = (kttHasMatch && !!legacyKttMatchSet[last2]) || !!autoHit;
       var noSearch = !legacyKttHasSearchInput;
       var forceDo3Hit = !!(opts && opts.forceDo3Hit);
+      var inverseHit = !!(opts && opts.inverseHit);
+      var hitKey = opts && opts.hitKey;
+      var pairColor = hitKey ? legacyKttPairColor(hitKey) : null;
+      var inverseDisplayToken = (inverseHit && /^\d+$/.test(String(hitKey || ""))) ? String(hitKey) : "";
+      var displayToken = inverseDisplayToken || last2;
+      var inverseDoField = !!(opts && legacyKttIsInverseDoField(opts.field));
       var do3Active = !!legacyKttDo3NamBacActive;
+      var inverseActive = !!legacyKttDoBacNamHomSauActive;
       var bg;
       var color;
       var fw;
@@ -9876,13 +10406,30 @@
           fw = v === "?" ? "normal" : "bold";
           fz = 14;
         }
+      } else if (inverseActive) {
+        if (inverseHit) {
+          bg = pairColor || kttMatchBg;
+          color = kttMatchClr;
+          fw = "bold";
+          fz = 16;
+        } else if (inverseDoField) {
+          bg = kttInversePendingBg;
+          color = v === "?" ? theme.muted : kttNormalClr;
+          fw = v === "?" ? "normal" : "bold";
+          fz = 14;
+        } else {
+          bg = bgColor;
+          color = v === "?" ? theme.muted : kttNormalClr;
+          fw = v === "?" ? "normal" : "bold";
+          fz = 14;
+        }
       } else {
         bg = (kttHasMatch && hit) ? kttMatchBg : bgColor;
         color = v === "?" ? theme.muted : (kttHasMatch && hit ? kttMatchClr : (autoHit ? theme.primary : (noSearch ? theme.error : kttNormalClr)));
         fw = v === "?" ? "normal" : "bold";
         fz = (kttHasMatch && hit) ? 16 : (autoHit ? 12 : (noSearch ? 12 : 14));
       }
-      var showLegacyBtn = !do3Active && noSearch && /^\d+$/.test(last2) && !autoHit;
+      var showLegacyBtn = !do3Active && !inverseActive && noSearch && /^\d+$/.test(displayToken) && !autoHit;
       return h("div", {
         style: {
           flex: 1,
@@ -9912,9 +10459,9 @@
           cursor: "pointer"
         },
         onClick: function () {
-          setSoChuInput(formatSoChuInputByHe((legacyKttClickMap && legacyKttClickMap[last2]) || last2, legacyHeThong));
+          setSoChuInput(formatSoChuInputByHe((legacyKttClickMap && legacyKttClickMap[displayToken]) || displayToken, legacyHeThong));
         }
-      }, last2) : (last2 || ""));
+      }, displayToken) : (displayToken || ""));
     }
     var kttCardBorder = "1px solid " + theme.border;
     var kttDateHeaderBg = theme.isDark
@@ -10003,11 +10550,14 @@
       if (ngayLabel && ngayLabel.indexOf("(") < 0 && thu) ngayLabel = ngayLabel + " (" + thu + ")";
       var cardYmd = normalizeLegacyDateYmd(row.ID);
       var do3DayHits = legacyKttDo3NamBacActive && cardYmd ? legacyKttDo3NamBacHitMap[cardYmd] : null;
+      var inverseDayHits = legacyKttDoBacNamHomSauActive && cardYmd ? legacyKttDoBacNamHomSauEffectiveHitMap[cardYmd] : null;
       function kttDo3Cell(val, bgColor, field) {
         return kttCellNode(val, bgColor, {
           row: row,
           field: field,
-          forceDo3Hit: !!(do3DayHits && do3DayHits[field])
+          forceDo3Hit: !!(do3DayHits && do3DayHits[field]),
+          inverseHit: !!(inverseDayHits && inverseDayHits[field]),
+          hitKey: (inverseDayHits && inverseDayHits[field]) || (do3DayHits && do3DayHits[field])
         });
       }
       function kttBacDoCell(val, field) {
@@ -10021,14 +10571,20 @@
         var v = String(row.B_duoi || "");
         var last2 = v === "?" ? "?" : v.slice(-tokenLen);
         var do3Active = !!legacyKttDo3NamBacActive;
+        var inverseActive = !!legacyKttDoBacNamHomSauActive;
         var do3Hit = !!(do3DayHits && do3DayHits.B_duoi);
+        var inverseHit = !!(inverseDayHits && inverseDayHits.B_duoi);
+        var inverseDisplayToken = (inverseHit && /^\d+$/.test(String(inverseDayHits && inverseDayHits.B_duoi || "")))
+          ? String(inverseDayHits.B_duoi)
+          : "";
+        var displayToken = inverseDisplayToken || last2;
         var autoHit = !do3Active
           && !legacyKttHasSearchInput
-          && /^\d+$/.test(last2)
+          && /^\d+$/.test(displayToken)
           && row
           && row.kttAutoHit
           && row.kttAutoHit.B_duoi;
-        var hit = !do3Active && ((kttHasMatch && !!legacyKttMatchSet[last2]) || !!autoHit);
+        var hit = !do3Active && ((kttHasMatch && !!legacyKttMatchSet[displayToken]) || !!autoHit);
         var noSearch = !legacyKttHasSearchInput;
         var bg;
         var color;
@@ -10046,13 +10602,25 @@
             fw = v === "?" ? "normal" : "bold";
             fz = 14;
           }
+        } else if (inverseActive) {
+          if (inverseHit) {
+            bg = legacyKttPairColor(inverseDayHits.B_duoi) || kttMatchBg;
+            color = kttMatchClr;
+            fw = "bold";
+            fz = 16;
+          } else {
+            bg = kttInversePendingBg;
+            color = v === "?" ? theme.muted : kttNormalClr;
+            fw = v === "?" ? "normal" : "bold";
+            fz = 14;
+          }
         } else {
           bg = (kttHasMatch && hit) ? kttMatchBg : KTT_COLORS.B;
           color = v === "?" ? theme.muted : (kttHasMatch && hit ? kttMatchClr : (autoHit ? theme.primary : (noSearch ? theme.error : kttNormalClr)));
           fw = v === "?" ? "normal" : "bold";
           fz = (kttHasMatch && hit) ? 16 : (autoHit ? 12 : (noSearch ? 12 : 14));
         }
-        var showLegacyBtn = !do3Active && noSearch && /^\d+$/.test(last2) && !autoHit;
+        var showLegacyBtn = !do3Active && !inverseActive && noSearch && /^\d+$/.test(displayToken) && !autoHit;
         var countLabel = monCount != null ? h("span", { style: { color: theme.muted, fontWeight: "normal", fontSize: 11, marginLeft: 3 } }, "(" + monCount + ")") : null;
         return h("div", {
           style: {
@@ -10082,9 +10650,9 @@
               cursor: "pointer"
             },
             onClick: function () {
-              setSoChuInput(formatSoChuInputByHe((legacyKttClickMap && legacyKttClickMap[last2]) || last2, legacyHeThong));
+              setSoChuInput(formatSoChuInputByHe((legacyKttClickMap && legacyKttClickMap[displayToken]) || displayToken, legacyHeThong));
             }
-          }, last2) : (last2 || ""),
+          }, displayToken) : (displayToken || ""),
           countLabel
         ]);
       }
@@ -13873,6 +14441,10 @@
                               onClick: function () { runLegacyKttDo3NamBac(false); },
                               loading: loading
                             }, tt.lgKttBtnDo3NamBac || "Dò 3 Nam dò xuống Bắc")
+                            ,h(Button, {
+                              onClick: function () { runLegacyKttDoBacNamHomSau(false); },
+                              loading: loading
+                            }, tt.lgKttBtnDoBacNamHomSau || "Dò Bắc dò Nam hôm sau")
                           ])
                         ]),
                         h(Col, { xs: 24, md: 24, key: "ktt_fields", style: { padding: "8px 10px", border: "1px solid " + theme.border, borderRadius: 6, background: "color-mix(in srgb, " + theme.cardBg + " 88%, " + theme.pageBg + " 12%)" } }, [
@@ -14367,6 +14939,12 @@
                   h("span", { style: { background: kttMatchBg, color: kttMatchClr, padding: "2px 8px", border: "1px solid " + theme.border, fontSize: 12, fontWeight: "bold" } }, tt.lgKttLegendMatch),
                   legacyKttDo3NamBacActive
                     ? h("span", { style: { background: kttMatchBg, color: kttMatchClr, padding: "2px 8px", border: "1px solid " + theme.border, fontSize: 12, fontWeight: "bold" } }, tt.lgKttLegendDo3NamBac || "▲ 3 Nam trúng Bắc (D+P+T→B)")
+                    : null,
+                  legacyKttDoBacNamHomSauActive
+                    ? h("span", { style: { background: kttMatchBg, color: kttMatchClr, padding: "2px 8px", border: "1px solid " + theme.border, fontSize: 12, fontWeight: "bold" } }, tt.lgKttBtnDoBacNamHomSau || "▼ Bắc trúng 3 Nam hôm sau (B→D+P+T)")
+                    : null
+                  ,legacyKttDoBacNamHomSauActive
+                    ? h("span", { style: { background: kttInversePendingBg, color: theme.text, padding: "2px 8px", border: "1px solid " + theme.border, fontSize: 12 } }, tt.lgKttInversePending || "Ô đã dò nhưng chưa trúng")
                     : null
                 ]),
                 (function () {
