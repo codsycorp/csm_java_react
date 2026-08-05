@@ -38,8 +38,8 @@ async function setupApp() {
 		// <StrictMode>
 		<TanstackQuery>
 			<App />
-		</TanstackQuery>,
-		// </StrictMode>,
+		</TanstackQuery>
+		// </StrictMode>
 	);
 
 	if (rootElement.hasChildNodes()) {

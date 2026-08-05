@@ -1095,33 +1095,21 @@ function getFieldComponent(
     );
   }
 
-  // edt dùng TextArea
+  // edt = Rich HTML Editor (giống CKEditor trong bản Vue: decodeURIComponent khi load, encodeURIComponent khi lưu)
   if (types === 'edt') {
-    return <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
-      <div>
-        <AutoComplete
-          options={textHistoryOptions}
-          filterOption={false}
-          onSelect={(nextValue) => {
-            form.setFieldsValue({ [key]: nextValue });
-            onFieldChange?.(key, nextValue);
+    const value = decodeHtmlValue(String(form.getFieldValue(key) ?? initialVal ?? ''));
+    return (
+      <Form.Item key={key} name={key} label={fieldLabel}>
+        <HtmlEditor
+          value={value}
+          onChange={(val: string) => {
+            form.setFieldsValue({ [key]: val });
+            onFieldChange?.(key, val);
           }}
-          dropdownMatchSelectWidth={false}
-        >
-          <Input.TextArea
-            rows={8}
-            disabled={isReadonly}
-            placeholder={textHistoryOptions.length > 0 ? "Nhập để lọc mẫu cũ và chọn nhanh" : undefined}
-            onChange={(event) => onFieldChange?.(key, event.target.value)}
-          />
-        </AutoComplete>
-        {textHistoryOptions.length > 0 && (
-          <div style={{ marginTop: 6, fontSize: 12, color: "var(--ant-colorTextDescription)" }}>
-            Gợi ý nhanh từ dữ liệu cũ cùng trường.
-          </div>
-        )}
-      </div>
-    </Form.Item>;
+          appId={appId}
+        />
+      </Form.Item>
+    );
   }
   
   // Kiểu Code Editor: codejs, codejava, codehtml, ... (dùng CodeMirror như TriggerEditor)
@@ -2189,8 +2177,8 @@ export function CsmEditModal({
           const kind = /datetime/.test(types) ? "datetime" : /^time$/.test(types) ? "time" : "date";
           convertedValues[key] = parseDateValueToDayjs(convertedValues[key], kind);
         }
-        // Keep html/edt values as plain text (no decrypt transform)
-        if (/html|richtext/.test(types) && typeof convertedValues[key] === 'string') {
+        // Decode URL-encoded HTML từ DB (Vue: decodeURIComponent) cho html/edt
+        if ((/html|richtext/.test(types) || types === 'edt') && typeof convertedValues[key] === 'string') {
           convertedValues[key] = decodeHtmlValue(convertedValues[key]);
         }
         // Parse JSON for image/album fields - only if it's a JSON array string
@@ -2359,7 +2347,7 @@ export function CsmEditModal({
           const kind = /datetime/.test(types) ? "datetime" : /^time$/.test(types) ? "time" : "date";
           encodedValues[f.f_name] = formatDateForStorage(encodedValues[f.f_name], kind);
         }
-        if (/html|richtext/.test(types) && typeof encodedValues[f.f_name] === 'string') {
+        if ((/html|richtext/.test(types) || types === 'edt') && typeof encodedValues[f.f_name] === 'string') {
           encodedValues[f.f_name] = encodeHtmlValue(encodedValues[f.f_name]);
         }
         if (/img|image|avatar|cover|album|images|gallery/.test(types)) {
@@ -2697,9 +2685,10 @@ export function CsmEditModal({
                         }
 
                         if (types === 'edt') {
+                          const value = decodeHtmlValue(String(form.getFieldValue(actualFieldName) ?? record?.[actualFieldName] ?? ''));
                           return (
                             <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
-                              <TextArea rows={6} />
+                              <HtmlEditor value={value} onChange={(val: string) => form.setFieldsValue({ [actualFieldName]: val })} appId={currentAppId} />
                             </Form.Item>
                           );
                         }

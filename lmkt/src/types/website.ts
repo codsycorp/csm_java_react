@@ -23,6 +23,7 @@ export interface ServicePost {
   content?: string;
   thumbnail?: string;
   images?: string[];
+  videos?: string[];
   serviceType?: string; // e.g. phan-mem, bat-dong-san, lam-dep-my-pham, cho-thue-xe, booking-online
   category?: string; // human readable category label
   serviceId?: string; // FK to WebServiceMenu.id
