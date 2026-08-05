@@ -33,6 +33,9 @@ func main() {
 	}
 	defer st.Shutdown()
 
+	// Start background disk cleanup scheduler (removes stale app_images, deletes legacy app_images_cache)
+	services.StartDiskCleanupScheduler(cfg)
+
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)

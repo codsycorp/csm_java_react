@@ -424,6 +424,19 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 			}
 		}
 	}
+	// Fallback to sys_la_routers meta when no service/detail matched (Java behavior)
+	if seo == nil {
+		if route.FTitle != "" {
+			pageTitle = route.FTitle
+		}
+		if route.FKeyword != "" {
+			pageDescription = route.FKeyword
+			pageKeywords = route.FKeyword
+		}
+		if route.FLogo != "" {
+			ogImage = absoluteAssetURL(route.FLogo, protocol, hostStr)
+		}
+	}
 
 	if ogImage == "" {
 		ogImage = absoluteAssetURL("default_og_image.png", protocol, hostStr)
@@ -1259,140 +1272,20 @@ func resolveSEOForServiceRoute(
 	if len(parts) > 0 {
 		slug = strings.TrimSpace(parts[len(parts)-1])
 	}
+	// Java: if slug equals main_service_code, switch to default_service_code
+	if slug == mainServiceCode && defaultServiceCode != "" {
+		slug = defaultServiceCode
+	}
 	if slug == "" || slug == "com.chrome.devtools.json" {
 		slug = "home"
 	}
 	domainLike := model.SearchFilter{Field: "domain", FilterType: "like", Value: domain}
-	oneSegment := len(parts) == 1
 
 	normalizeDescription := func(desc string) string {
 		return strings.TrimSpace(stripHTMLToText(desc, 220))
 	}
 
-	buildServiceMeta := func(row map[string]any) *seoMeta {
-		title := recordLangStr(row, "meta_title", lang)
-		if title == "" {
-			title = recordLangStr(row, "seo_title", lang)
-		}
-		if title == "" {
-			title = recordLangStr(row, "attributes_title", lang)
-		}
-		if title == "" {
-			title = recordLangStr(row, "category", lang)
-		}
-		if title == "" {
-			title = recordLangStr(row, "title", lang)
-		}
-		keywords := strings.TrimSpace(recordLangStr(row, "meta_keywords", lang))
-		if keywords == "" {
-			keywords = strings.TrimSpace(recordLangStr(row, "seo_keywords", lang))
-		}
-		if keywords == "" {
-			keywords = strings.TrimSpace(recordLangStr(row, "attributes_keywords", lang))
-		}
-		if keywords == "" {
-			keywords = strings.TrimSpace(recordLangStr(row, "keywords", lang))
-		}
-		description := normalizeDescription(resolveServiceDescription(rm, row, lang))
-		if description == "" {
-			description = normalizeDescription(resolveDescriptionFromFields(rm, row, lang))
-		}
-		return &seoMeta{
-			Title:       title,
-			Keywords:    keywords,
-			Description: description,
-			Image:       recordStr(row, "image"),
-			Lang:        lang,
-			Slug:        slug,
-			FromService: true,
-		}
-	}
-
-	pickBestServiceRow := func(rows []map[string]any) map[string]any {
-		bestScore := -1
-		best := map[string]any(nil)
-		for _, row := range rows {
-			score := 0
-			rowSlug := strings.TrimSpace(recordStr(row, "slug"))
-			rowCode := strings.TrimSpace(recordStr(row, "service_code"))
-			if strings.EqualFold(rowSlug, slug) {
-				score += 50
-			}
-			if strings.EqualFold(rowCode, slug) {
-				score += 40
-			}
-			if strings.TrimSpace(recordLangStr(row, "attributes_title", lang)) != "" || strings.TrimSpace(recordLangStr(row, "category", lang)) != "" {
-				score += 20
-			}
-			if strings.TrimSpace(recordLangStr(row, "attributes_keywords", lang)) != "" || strings.TrimSpace(recordLangStr(row, "keywords", lang)) != "" {
-				score += 10
-			}
-			if normalizeDescription(resolveServiceDescription(rm, row, lang)) != "" || normalizeDescription(resolveDescriptionFromFields(rm, row, lang)) != "" {
-				score += 20
-			}
-			if recordBool(row, "is_group_slug") {
-				score += 3
-			}
-			if score > bestScore {
-				bestScore = score
-				best = row
-			}
-		}
-		return best
-	}
-
-	queryServiceRow := func(withDomain bool) map[string]any {
-		baseConds := []model.SearchFilter{model.EqFilter("status", "active")}
-		if withDomain && domain != "" {
-			baseConds = append(baseConds, domainLike)
-		}
-
-		slugConds := append([]model.SearchFilter{}, baseConds...)
-		slugConds = append(slugConds, model.EqFilter("slug", slug))
-		rowsSlug := rowsFrom(rm.Filter(route.AppID, route.TblServices, model.SearchFilter{Operator: "AND", Conditions: slugConds}))
-
-		codeConds := append([]model.SearchFilter{}, baseConds...)
-		codeConds = append(codeConds, model.EqFilter("service_code", slug))
-		rowsCode := rowsFrom(rm.Filter(route.AppID, route.TblServices, model.SearchFilter{Operator: "AND", Conditions: codeConds}))
-
-		rows := make([]map[string]any, 0, len(rowsSlug)+len(rowsCode))
-		seen := map[string]struct{}{}
-		for _, row := range rowsSlug {
-			id := strings.TrimSpace(recordStr(row, "id"))
-			if id != "" {
-				if _, ok := seen[id]; ok {
-					continue
-				}
-				seen[id] = struct{}{}
-			}
-			rows = append(rows, row)
-		}
-		for _, row := range rowsCode {
-			id := strings.TrimSpace(recordStr(row, "id"))
-			if id != "" {
-				if _, ok := seen[id]; ok {
-					continue
-				}
-				seen[id] = struct{}{}
-			}
-			rows = append(rows, row)
-		}
-
-		if len(rows) == 0 {
-			return nil
-		}
-		return pickBestServiceRow(rows)
-	}
-
-	if oneSegment {
-		if row := queryServiceRow(true); len(row) > 0 {
-			return buildServiceMeta(row)
-		}
-		if row := queryServiceRow(false); len(row) > 0 {
-			return buildServiceMeta(row)
-		}
-	}
-
+	// ── Priority 1: detail table (Java resolves detail BEFORE service) ──
 	detailFilter := model.SearchFilter{
 		Operator: "AND",
 		Conditions: []model.SearchFilter{
@@ -1413,10 +1306,65 @@ func resolveSEOForServiceRoute(
 		}
 	}
 
-	if row := queryServiceRow(true); len(row) > 0 {
+	// ── Priority 2: service table with is_service=true ──
+	buildServiceMeta := func(row map[string]any) *seoMeta {
+		// Java uses attributes_title first, then category (no meta_title/seo_title)
+		title := recordLangStr(row, "attributes_title", lang)
+		if title == "" {
+			title = recordLangStr(row, "category", lang)
+		}
+		if title == "" {
+			title = recordLangStr(row, "title", lang)
+		}
+		// Java uses attributes_keywords first
+		keywords := strings.TrimSpace(recordLangStr(row, "attributes_keywords", lang))
+		if keywords == "" {
+			keywords = strings.TrimSpace(recordLangStr(row, "keywords", lang))
+		}
+		description := normalizeDescription(resolveServiceDescription(rm, row, lang))
+		if description == "" {
+			description = normalizeDescription(resolveDescriptionFromFields(rm, row, lang))
+		}
+		return &seoMeta{
+			Title:       title,
+			Keywords:    keywords,
+			Description: description,
+			Image:       recordStr(row, "image"),
+			Lang:        lang,
+			Slug:        slug,
+			FromService: true,
+		}
+	}
+
+	queryServiceBySlug := func(isService bool, withDomain bool) map[string]any {
+		conds := []model.SearchFilter{
+			model.EqFilter("status", "active"),
+			model.EqFilter("slug", slug),
+		}
+		if isService {
+			conds = append(conds, model.EqFilter("is_service", true))
+		} else {
+			conds = append(conds, model.EqFilter("is_service", false))
+		}
+		if withDomain && domain != "" {
+			conds = append(conds, domainLike)
+		}
+		return rm.Find(route.AppID, route.TblServices, model.SearchFilter{Operator: "AND", Conditions: conds})
+	}
+
+	// Try is_service=true first (with domain, then without)
+	if row := queryServiceBySlug(true, true); len(row) > 0 {
 		return buildServiceMeta(row)
 	}
-	if row := queryServiceRow(false); len(row) > 0 {
+	if row := queryServiceBySlug(true, false); len(row) > 0 {
+		return buildServiceMeta(row)
+	}
+
+	// ── Priority 3: service table with is_service=false (non-service menu items) ──
+	if row := queryServiceBySlug(false, true); len(row) > 0 {
+		return buildServiceMeta(row)
+	}
+	if row := queryServiceBySlug(false, false); len(row) > 0 {
 		return buildServiceMeta(row)
 	}
 
