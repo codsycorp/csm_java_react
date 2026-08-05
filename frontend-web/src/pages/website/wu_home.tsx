@@ -1,7 +1,7 @@
 // Dùng slugify chuẩn hoá dùng chung
 import { slugify } from "../../utils/normalize";
 import { getDefaultCategorySlug } from "../../utils/getDefaultCategorySlug";
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { useLocation } from "react-router";
 import i18n from "i18next";
 // Hook đổi ngôn ngữ theo ?hl= trên URL
@@ -283,30 +283,38 @@ export default function WuHome() {
     AppstoreOutlined: <AppstoreOutlined />, 
     GlobalOutlined: <GlobalOutlined />,
   };
-  let businessSectors: Array<any> = [];
-  if (typeof window !== 'undefined' && Array.isArray(window.__SSR_WEBSITE_CATEGORIES__)) {
-    // Chuẩn hóa lấy các lĩnh vực con: group_slug === 'dich-vu' && is_group_slug === false
+  
+  // Read SSR categories in useMemo to avoid re-render mismatches
+  const ssrCategories = useMemo(() => {
+    if (typeof window === 'undefined') return [];
+    return Array.isArray(window.__SSR_WEBSITE_CATEGORIES__) ? window.__SSR_WEBSITE_CATEGORIES__ : [];
+  }, []);
+  
+  const businessSectors = useMemo(() => {
     const isSSRCategory = (cat: any): cat is { color: string; icon: string; description: string; category: string; slug: string; group_slug: string; is_group_slug: boolean } => {
       return cat && typeof cat === 'object' && 'color' in cat && 'icon' in cat && 'description' in cat && 'category' in cat && 'slug' in cat && 'group_slug' in cat && typeof cat.group_slug === 'string' && 'is_group_slug' in cat && typeof cat.is_group_slug === 'boolean';
     };
-    businessSectors = window.__SSR_WEBSITE_CATEGORIES__
-      .filter(cat => isSSRCategory(cat) && cat.group_slug !== '' && cat.is_group_slug === false)
-      .map((cat: any) => ({
-        key: cat.slug,
-        slug: cat.slug,
-        title: cat.category,
-        description: cat.description,
-        icon: iconMap[cat.icon] || <GlobalOutlined />,
-        color: cat.color || '#1890ff',
-        route: (() => {
-          const lang = i18n.language && i18n.language !== 'cimode' ? i18n.language.slice(0,2) : 'vi';
-          return lang !== 'vi' ? `/${cat.slug}?hl=${lang}` : `/${cat.slug}`;
-        })(),
-        stats: '',
-      }));
-  } else {
+    
+    if (ssrCategories.length > 0) {
+      return ssrCategories
+        .filter(cat => isSSRCategory(cat) && cat.group_slug !== '' && cat.is_group_slug === false)
+        .map((cat: any) => ({
+          key: cat.slug,
+          slug: cat.slug,
+          title: cat.category,
+          description: cat.description,
+          icon: iconMap[cat.icon] || <GlobalOutlined />,
+          color: cat.color || '#1890ff',
+          route: (() => {
+            const lang = i18n.language && i18n.language !== 'cimode' ? i18n.language.slice(0,2) : 'vi';
+            return lang !== 'vi' ? `/${cat.slug}?hl=${lang}` : `/${cat.slug}`;
+          })(),
+          stats: '',
+        }));
+    }
+    
     // fallback: giữ nguyên logic cũ nếu không có SSR
-    businessSectors = [
+    return [
       {
         key: "bat-dong-san",
         slug: "bat-dong-san",
@@ -320,9 +328,8 @@ export default function WuHome() {
         })(),
         stats: t("website.business.realestate.stats", "500+ Dự án"),
       },
-      // ... các sector khác như cũ ...
     ];
-  }
+  }, [ssrCategories, i18n.language, t, iconMap]);
 
   // Client testimonials with translations
   const testimonials = [

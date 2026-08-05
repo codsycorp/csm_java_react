@@ -10,7 +10,7 @@
  * - Single route definition handles all dynamic categories
  */
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import { useParams } from 'react-router';
 import WuServices from './wu_services';
 import WuNoContentPage from './wu_no_content_page';
@@ -19,10 +19,15 @@ import WuGroupLandingPage from './wu_group_landing';
 export default function WuCategoryPage() {
   const { slug } = useParams<{ slug: string }>();
 
-  const ssrCategories: any[] =
-    (typeof window !== 'undefined' ? (window as any).__SSR_WEBSITE_CATEGORIES__ : null) || [];
+  // Read SSR data in useMemo to avoid re-render mismatches
+  const ssrCategories = useMemo(() => {
+    if (typeof window === 'undefined') return [];
+    return (window as any).__SSR_WEBSITE_CATEGORIES__ || [];
+  }, []);
 
-  const catObj = slug ? ssrCategories.find((c) => c && c.slug === slug) : null;
+  const catObj = useMemo(() => {
+    return slug ? ssrCategories.find((c: any) => c && c.slug === slug) : null;
+  }, [slug, ssrCategories]);
 
   const isGroupRoute = Boolean(catObj && catObj.is_group_slug === true);
 
