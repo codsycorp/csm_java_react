@@ -67,7 +67,7 @@ export default defineConfig({
 		// https://vitejs.dev/config/server-options#server-proxy
 		proxy: {
 			"/api": {
-				target: process.env.VITE_API_BASE_URL || "http://localhost:8080",
+				target: process.env.VITE_API_BASE_URL || "http://localhost:9999",
 				changeOrigin: true,
 				rewrite: path => path.replace(/^\/api/, ""),
 			},

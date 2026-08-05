@@ -391,31 +391,51 @@ export default function WebsiteLayoutInner({ children, selectedKey, menuItems, t
     },
   };
 
-  const menuItemsForMenu = effectiveMenuItems?.map(item => ({
-    key: item.key,
-    icon: item.icon ? React.cloneElement(item.icon as React.ReactElement, { fill: "currentColor", color: "currentColor" }) : undefined,
-    label: item.path ? (
-      <a
-        href={item.path}
-        onClick={() => updateBridgeContextByPath(item.path || item.key)}
-        className={item.key === selectedKey ? `${styles.wuMenuLink} ${styles.wuMenuLinkActive}` : styles.wuMenuLink}
-      >
-        {item.label}
-      </a>
-    ) : item.label,
-    children: item.children?.map(child => ({
-      key: child.key,
-      label: child.path ? (
-        <a
-          href={child.path}
-          onClick={() => updateBridgeContextByPath(child.path || child.key)}
-          className={child.key === selectedKey ? `${styles.wuMenuLink} ${styles.wuMenuLinkActive}` : styles.wuMenuLink}
+  const menuItemsForMenu = effectiveMenuItems?.map((item) => {
+    const hasChildren = Boolean(item.children && item.children.length > 0);
+    return {
+      key: item.key,
+      icon: item.icon ? React.cloneElement(item.icon as React.ReactElement, { fill: "currentColor", color: "currentColor" }) : undefined,
+      label: hasChildren ? (
+        <span
+          onClick={() => updateBridgeContextByPath(item.path || item.key)}
+          className={item.key === selectedKey ? `${styles.wuMenuLink} ${styles.wuMenuLinkActive}` : styles.wuMenuLink}
         >
-          {child.label}
+          {item.label}
+        </span>
+      ) : item.path ? (
+        <a
+          href={item.path}
+          onClick={() => updateBridgeContextByPath(item.path || item.key)}
+          className={item.key === selectedKey ? `${styles.wuMenuLink} ${styles.wuMenuLinkActive}` : styles.wuMenuLink}
+        >
+          {item.label}
         </a>
-      ) : child.label
-    }))
-  }));
+      ) : item.label,
+      children: item.children?.map((child) => ({
+        key: child.key,
+        label: child.path ? (
+          <a
+            href={child.path}
+            onClick={() => updateBridgeContextByPath(child.path || child.key)}
+            className={child.key === selectedKey ? `${styles.wuMenuLink} ${styles.wuMenuLinkActive}` : styles.wuMenuLink}
+          >
+            {child.label}
+          </a>
+        ) : child.label
+      }))
+    };
+  });
+
+  const parentMenuKeySet = useMemo(() => {
+    const keys = new Set<string>();
+    (effectiveMenuItems || []).forEach((item) => {
+      if (item.children && item.children.length > 0) {
+        keys.add(item.key);
+      }
+    });
+    return keys;
+  }, [effectiveMenuItems]);
 
   if (!isClient) {
     return (
@@ -441,6 +461,7 @@ export default function WebsiteLayoutInner({ children, selectedKey, menuItems, t
                   selectedKeys={selectedKeys}
                   openKeys={openMenuKeys}
                   onOpenChange={setOpenMenuKeys}
+                  triggerSubMenuAction="click"
                   disabledOverflow={true}
                   className={styles.wuMenu}
                   style={{
@@ -471,7 +492,11 @@ export default function WebsiteLayoutInner({ children, selectedKey, menuItems, t
                   openKeys={openMenuKeys}
                   onOpenChange={setOpenMenuKeys}
                   className={styles.wuMobileMenu}
-                  onClick={() => setDrawerOpen(false)}
+                  onClick={({ key }) => {
+                    if (!parentMenuKeySet.has(String(key))) {
+                      setDrawerOpen(false);
+                    }
+                  }}
                 />
               )}
               

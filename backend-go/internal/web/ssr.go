@@ -489,6 +489,9 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 		appConfig["f_logo"] = routeLogo
 	}
 	scripts := buildScripts(appConfig, initialData, categories, ssrRoutes, dynamicTemplates, meta, defaultServiceCode)
+	if monolith := buildMonolithBootstrapScript(ctx.RM, host, rpIndex); monolith != "" {
+		scripts = monolith + scripts
+	}
 
 	preload := ""
 	if strings.HasPrefix(ogImage, "http://") || strings.HasPrefix(ogImage, "https://") {

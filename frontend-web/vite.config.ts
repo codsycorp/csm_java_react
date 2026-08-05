@@ -28,7 +28,7 @@ const isDev = process.env.NODE_ENV === "development";
 // https://vitejs.dev/config/
 export default defineVitestConfig(({ mode }) => {
 	const env = loadEnv(mode, process.cwd(), "");
-	const apiBaseUrl = env.VITE_API_BASE_URL || "http://localhost:8080";
+	const apiBaseUrl = env.VITE_API_BASE_URL || "http://localhost:9999";
 
 	return {
 	base: "/",

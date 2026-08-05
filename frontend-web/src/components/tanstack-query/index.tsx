@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useEffect, useState } from "react";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
@@ -19,9 +20,17 @@ export interface TanstackQueryProps {
 }
 
 export function TanstackQuery({ children }: TanstackQueryProps) {
+	const [showDevtools, setShowDevtools] = useState(false);
+
+	useEffect(() => {
+		if (import.meta.env.DEV) {
+			setShowDevtools(true);
+		}
+	}, []);
+
 	return (
 		<QueryClientProvider client={queryClient}>
-			<ReactQueryDevtools initialIsOpen={false} />
+			{showDevtools ? <ReactQueryDevtools initialIsOpen={false} /> : null}
 			{children}
 		</QueryClientProvider>
 	);

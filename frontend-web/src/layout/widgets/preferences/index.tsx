@@ -23,7 +23,7 @@ export function Preferences({ ...restProps }: ButtonProps) {
 
 	const clearAndLogout = async () => {
 		await logout();
-		usePreferencesStore.persist.clearStorage();
+		sessionStorage.removeItem("preferences");
 		navigate("/login");
 	};
 

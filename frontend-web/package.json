@@ -22,6 +22,7 @@
 		"clean": "rm -rf node_modules dist && pnpm install",
 		"dev": "vite --host",
 		"build": "NODE_OPTIONS=--max-old-space-size=8192 vite build",
+		"build:monolith": "pnpm build && node ./scripts/export-mfe-manifest.mjs",
 		"build:analyze": "NODE_OPTIONS=--max-old-space-size=8192 vite build --mode analyze",
 		"preview": "vite preview",
 		"typecheck": "tsc --noEmit",
@@ -86,7 +87,8 @@
 		"react-i18next": "^15.4.0",
 		"react-jss": "^10.10.0",
 		"react-quill": "^2.0.0",
-		"react-router": "^7.1.1",
+		"react-router": "7.2.0",
+		"react-router-dom": "7.2.0",
 		"react-use": "^17.4.0",
 		"simplebar-react": "^3.3.0",
 		"socket.io-client": "^4.7.5",
@@ -94,7 +96,7 @@
 		"styled-components": "^5.3.6",
 		"tailwind-merge": "^2.6.0",
 		"xlsx": "^0.18.5",
-		"zustand": "^5.0.3"
+		"zustand": "5.0.3"
 	},
 	"devDependencies": {
 		"@antfu/eslint-config": "^3.14.0",
@@ -146,5 +148,12 @@
 		"*": [
 			"eslint --fix"
 		]
+	},
+	"pnpm": {
+		"overrides": {
+			"react-router": "7.2.0",
+			"react-router-dom": "7.2.0",
+			"zustand": "5.0.3"
+		}
 	}
 }

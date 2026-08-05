@@ -626,9 +626,6 @@ const WuServicesPage: React.FC = () => {
     const w: any = typeof window !== 'undefined' ? window : undefined;
     const hasInlineData = Boolean(w && (w.__INITIAL_REACT_DATA__ || w.initialReactData));
     if (hasInlineData) {
-      if (fallbackInitialData !== null) {
-        setFallbackInitialData(null);
-      }
       return;
     }
 
@@ -648,7 +645,7 @@ const WuServicesPage: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [location.pathname, location.search, fallbackInitialData, fetchSSRInitialDataByPath]);
+  }, [location.pathname, location.search, fetchSSRInitialDataByPath]);
 
   // Per-user session id to keep pagination & search stable
   const getSessionId = () => {

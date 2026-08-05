@@ -258,6 +258,39 @@ export function useWebsiteMenu() {
     return labels.vi;
   };
 
+  const buildStaticBridgeChildren = () => {
+    const staticChildren = [
+      {
+        slug: 'phan-mem',
+        label: { vi: 'Phần Mềm', en: 'Software', zh: '软件' },
+      },
+      {
+        slug: 'bat-dong-san',
+        label: { vi: 'Bất Động Sản', en: 'Real Estate', zh: '房地产' },
+      },
+      {
+        slug: 'lam-dep-my-pham',
+        label: { vi: 'Mỹ Phẩm & Làm Đẹp', en: 'Beauty & Cosmetics', zh: '美妆与美容' },
+      },
+      {
+        slug: 'cho-thue-xe',
+        label: { vi: 'Cho Thuê Xe 4-7 Chỗ', en: 'Car Rental 4-7 Seats', zh: '4-7座租车' },
+      },
+      {
+        slug: 'booking-online',
+        label: { vi: 'Đặt Lịch Online', en: 'Online Booking', zh: '在线预约' },
+      },
+    ];
+
+    return staticChildren.map((item) => ({
+      key: `/${item.slug}`,
+      label: getFallbackLabel(item.label),
+      path: buildPath(`/${item.slug}`),
+      icon: <DatabaseOutlined />,
+      children: [],
+    }));
+  };
+
   const resolvedTargetMenus = (() => {
     const lotteryParent = findGroupMenu('thong-ke-ket-qua-xo-so');
     const bridgeParent = findGroupMenu('hop-tac-kinh-doanh');
@@ -268,13 +301,16 @@ export function useWebsiteMenu() {
       const direct = bridgeParent?.children || [];
       if (direct.length > 0) return direct;
       // Legacy-compatible fallback: keep old categories but render under new bridge menu.
-      return buildChildrenFromSlugs([
+      const fromSlugs = buildChildrenFromSlugs([
         'phan-mem',
         'bat-dong-san',
         'lam-dep-my-pham',
         'cho-thue-xe',
         'booking-online',
       ]);
+      if (fromSlugs.length > 0) return fromSlugs;
+      // Guaranteed fallback when SSR categories are unavailable.
+      return buildStaticBridgeChildren();
     })();
 
     return [

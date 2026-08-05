@@ -22,6 +22,7 @@
 		"clean": "rm -rf node_modules dist && pnpm install",
 		"dev": "vite --host",
 		"build": "NODE_OPTIONS=--max-old-space-size=8192 vite build",
+		"build:monolith": "pnpm build && node ./scripts/export-mfe-manifest.mjs",
 		"build:analyze": "NODE_OPTIONS=--max-old-space-size=8192 vite build --mode analyze",
 		"preview": "vite preview",
 		"typecheck": "tsc --noEmit",

@@ -6,7 +6,7 @@ import suppressDevelopmentWarnings from "#src/utils/suppressWarnings";
 import "#src/utils/chatHelpers"; // Import để expose chat helpers lên window
 
 // import { StrictMode } from "react";
-import { createRoot } from "react-dom/client";
+import { createRoot, hydrateRoot } from "react-dom/client";
 
 import App from "./app";
 import "./styles/index.css";
@@ -34,17 +34,24 @@ async function setupApp() {
 	const rootElement = document.getElementById("root");
 	if (!rootElement)
 		return;
-	const root = createRoot(
-		rootElement,
-	);
-
-	root.render(
+	const app = (
 		// <StrictMode>
 		<TanstackQuery>
 			<App />
-		</TanstackQuery>,
+		</TanstackQuery>
 		// </StrictMode>,
 	);
+
+	// Hydrate only when server explicitly marks the root as hydration-safe.
+	// Legacy SSR pages may inject non-React HTML that must not be hydrated.
+	const shouldHydrate = rootElement.getAttribute("data-react-hydrate") === "1";
+	if (shouldHydrate && rootElement.hasChildNodes()) {
+		hydrateRoot(rootElement, app);
+		return;
+	}
+
+	const root = createRoot(rootElement);
+	root.render(app);
 }
 
 setupApp();

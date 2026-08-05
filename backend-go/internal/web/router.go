@@ -26,6 +26,13 @@ func HandleWebPath(st *state.AppState, w http.ResponseWriter, r *http.Request, u
 	case "/manifest.json":
 		ServeManifestJSON(st, w)
 		return
+	case "/mfe/manifest":
+		rpIndex := ResolveRPIndexPub(st.RecordManager, host)
+		if active := strings.TrimSpace(QSParam(query, "active")); active != "" {
+			rpIndex = active
+		}
+		ServeMonolithManifest(st, w, host, rpIndex)
+		return
 	case "/page_struct_js.shtml":
 		ServePageStructJS(st, w, query)
 		return
