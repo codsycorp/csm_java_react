@@ -487,6 +487,14 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 		"app_id":          route.AppID,
 	}
 
+	// Check if this is the lottery statistics page
+	if segments := strings.Split(strings.TrimPrefix(normalizedPath, "/"), "/"); len(segments) > 0 {
+		lastSegment := segments[len(segments)-1]
+		if lastSegment == "thong-ke-ket-qua-xo-so" {
+			initialData["isSpecialPage"] = true
+		}
+	}
+
 	// Keep data hydration independent from static index availability: local/dev routes may omit rp_index.
 	if isWebAppType && route.AppID != "" && route.TblServiceDetail != "" {
 		listing := resolveServiceListing(ctx.RM, route, domain, normalizedPath, params, mainServiceCode, defaultServiceCode)
