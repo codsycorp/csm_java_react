@@ -11627,29 +11627,27 @@
       return 0;
     }
 
-    function passLegacySlrAutoTongHopDd3NbFilter(metric, cfg) {
-      if (!metric) return false;
-      // VÔ HIỆU HÓA lọc DD3 Nam-Bắc và KTN - chỉ hiển thị để người dùng tự đối chiếu
-      // var filterCfg = cfg || getLegacySlrAutoTongHopFilterConfig();
-      // if (filterCfg.minNgayCx3Nb === null && filterCfg.maxKtnLast === null) return true;
-      // if (filterCfg.minNgayCx3Nb !== null) {
-      //   if (!(Number(metric.ngayCXHT3NB || 0) >= filterCfg.minNgayCx3Nb)) return false;
-      // }
-      // if (filterCfg.maxKtnLast !== null) {
-      //   var ktnWeek = parseLegacySlrAutoKtnLastWeekValue(metric);
-      //   if (ktnWeek > filterCfg.maxKtnLast) return false;
-      // }
-      return true; // Không lọc, giữ tất cả kết quả
+    function passLegacySlrAutoTongHopDd3NbFilter(row, cfg) {
+      var rec = row || {};
+      if (!rec) return false;
+      var filterCfg = cfg || getLegacySlrAutoTongHopFilterConfig();
+      if (filterCfg.minNgayCx3Nb !== null) {
+        if (!(Number(rec.ngayCXHT3NB || rec.ngayCXHT || 0) >= filterCfg.minNgayCx3Nb)) return false;
+      }
+      if (filterCfg.maxKtnLast !== null) {
+        var ktnWeek = Number(rec.ktnLastWeek || 0);
+        if (ktnWeek > filterCfg.maxKtnLast) return false;
+      }
+      if (filterCfg.minZeroWeek !== null) {
+        if (!(Number(rec.tongNamZeroWeekStreak || 0) >= filterCfg.minZeroWeek)) return false;
+      }
+      return true;
     }
 
     function passLegacySlrAutoTongHopExtraFilter(row, cfg) {
       var filterCfg = cfg || getLegacySlrAutoTongHopFilterConfig();
       var rec = row || {};
-
-      // VÔ HIỆU HÓA lọc Tuần 0 - chỉ hiển thị để người dùng tự đối chiếu
-      // if (filterCfg.minZeroWeek !== null) {
-      //   if (!(Number(rec.tongNamZeroWeekStreak || 0) >= Number(filterCfg.minZeroWeek || 0))) return false;
-      // }
+      var isDd3Row = isLegacySlrAutoTongHopDd3Row(rec);
 
       if (Array.isArray(filterCfg.soFilterTokens) && filterCfg.soFilterTokens.length) {
         var rowTokens = parseSoChuByHeThong(String(rec.tongHopInput || ""), legacyHeThong);
@@ -11665,10 +11663,11 @@
         if (!hasToken) return false;
       }
 
-      // KHÔNG áp dụng lọc Ngày chưa xổ và Kỳ chưa xổ cho dòng DD3 Nam-Bắc
-      // để giữ thống kê "Đầu đuôi 3 Đài Nam - Bắc" cho mỗi cách.
-      var isDd3Row = isLegacySlrAutoTongHopDd3Row(rec);
-      if (isDd3Row) return true;
+      if (isDd3Row) {
+        // Keep the DD3 Nam-Bắc supplemental row visible for no-show date/ky filters,
+        // while still honoring DD3-specific filters like min no-show days, KTN week, and zero-week streak.
+        return passLegacySlrAutoTongHopDd3NbFilter(rec, filterCfg);
+      }
 
       if (Array.isArray(filterCfg.ngayCxValues) && filterCfg.ngayCxValues.length) {
         var ngayCx = Number(rec.ngayCXHT || 0);
@@ -12004,13 +12003,6 @@
           });
 
           var hitBatchRows = Array.isArray(hitBatchPack.pickBatch) ? hitBatchPack.pickBatch.slice() : [];
-          var dd3nbMetricForFilter = hitBatchPack.dd3nbMetricForFilter;
-          if (dd3nbMetricForFilter && hasLegacySlrAutoTongHopFilter(thFilterCfg)) {
-            if (!passLegacySlrAutoTongHopDd3NbFilter(dd3nbMetricForFilter, thFilterCfg)) {
-              filteredOutCount += 1;
-              continue;
-            }
-          }
           if (hasLegacySlrAutoTongHopFilter(thFilterCfg)) {
             hitBatchRows = hitBatchRows.filter(function (pickRow) {
               return passLegacySlrAutoTongHopExtraFilter(pickRow, thFilterCfg);
@@ -12285,23 +12277,25 @@
             skippedCount += 1;
             continue;
           }
-          if (dd3nbMetricForFilter && hasLegacySlrAutoTongHopFilter(thFilterCfg)) {
-            if (!passLegacySlrAutoTongHopDd3NbFilter(dd3nbMetricForFilter, thFilterCfg)) {
-              filteredOutCount += 1;
-              continue;
-            }
-          }
           if (!isLegacySlrDd3NamBacQueryValue(normalizedMainQueryValue, legacyHeThong)
             && !pickBatch.some(isLegacySlrAutoTongHopDd3Row)) {
             missingDd3Count += 1;
           }
           if (hasLegacySlrAutoTongHopFilter(thFilterCfg)) {
+            var mainPickRow = pickBatch.filter(function (pickRow) {
+              return !isLegacySlrAutoTongHopDd3Row(pickRow);
+            })[0] || null;
+            var mainPickRowPasses = !mainPickRow || passLegacySlrAutoTongHopExtraFilter(mainPickRow, thFilterCfg);
+            if (!mainPickRowPasses) {
+              filteredOutCount += 1;
+              continue;
+            }
             var beforeExtraLen = pickBatch.length;
             pickBatch = pickBatch.filter(function (pickRow) {
               return passLegacySlrAutoTongHopExtraFilter(pickRow, thFilterCfg);
             });
             if (!pickBatch.length) {
-              extraFilteredOutCount += 1;
+              filteredOutCount += 1;
               continue;
             }
             if (beforeExtraLen > pickBatch.length) {
