@@ -14365,7 +14365,7 @@
                                   onChange: function (v) {
                                     var next = String(v || "C");
                                     setLegacyCdMode(next);
-                                    setLegacyRankTo(next === "2C" ? 5 : 93);
+                                    setLegacyRankTo(next === "2C" ? 50 : 93);
                                   }
                                 }))
                               ]),
