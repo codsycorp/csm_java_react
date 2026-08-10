@@ -1,0 +1,54 @@
+{
+    "domain_name": "0.0.0.0",
+    "port": 9999,
+    "sslport": -1,
+    "cpanel": false,
+    "cookieSecret": "cookiesecret",
+    "sessionSecret": "sessionsecret",
+    "cookieKeyName": "mongo-express",
+    "c_phone": "0795.162.822",
+    "c_writeby": "bea_.wzc.occ",
+    "phone": "0937.528.839",
+    "writeby": "base._co.osa",
+    "dart_eval":"cd ~ && dart run dart_eval compile",
+    "dart_eval_out":"-o",
+    "database_config": {
+        "database_default": "dbsys"
+    },
+    "ssl": [
+        {
+            "host": "phongthuyphattam.net",
+            "op_target": false
+        },
+        {
+            "host": "phanmemmottrieu.net",
+            "ssl_name": "vn369.net",
+            "op_target": {
+                "target": {
+                    "host": "localhost",
+                    "port": 81
+                }
+            }
+        },
+        {
+            "host": "phongthuyphattam.net",
+            "ssl_name": "phongthuyphattam.net",
+            "op_target": {
+                "target": {
+                    "host": "localhost",
+                    "port": 9999
+                }
+            }
+        },
+        {
+            "host": "livestream.vn369.net",
+            "ssl_name": "vn369.net",
+            "op_target": {
+                "target": {
+                    "host": "localhost",
+                    "port": 9999
+                }
+            }
+        }
+    ]
+}

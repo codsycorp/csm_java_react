@@ -197,7 +197,7 @@ func HandleWebPath(st *state.AppState, w http.ResponseWriter, r *http.Request, u
 
 	ctx := SSRContext{RM: st.RecordManager}
 	html := RenderPage(ctx, uri, host, query)
-	writeTextCached(w, http.StatusOK, "text/html; charset=utf-8", html, "public, max-age=60, stale-while-revalidate=300")
+	writeTextCached(w, http.StatusOK, "text/html; charset=utf-8", html, "public, max-age=60, stale-while-revalidate=300, stale-if-error=600")
 }
 
 func ServeStatic(st *state.AppState, w http.ResponseWriter, r *http.Request, uri string) {
@@ -211,5 +211,5 @@ func ServeSSR(st *state.AppState, w http.ResponseWriter, r *http.Request, uri, h
 	}
 	ctx := SSRContext{RM: st.RecordManager}
 	html := RenderPage(ctx, uri, host, query)
-	writeTextCached(w, http.StatusOK, "text/html; charset=utf-8", html, "public, max-age=60, stale-while-revalidate=300")
+	writeTextCached(w, http.StatusOK, "text/html; charset=utf-8", html, "public, max-age=60, stale-while-revalidate=300, stale-if-error=600")
 }

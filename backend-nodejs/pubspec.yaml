@@ -1,0 +1,10 @@
+name: DART_SERVER  # Tên dự án của bạn
+description: A sample Dart project using dart_eval
+publish_to: 'none'  # Không xuất bản lên pub.dev
+
+environment:
+  sdk: '>=3.5.0 <4.0.0'  # Phiên bản Dart SDK
+
+dependencies:
+  dart_eval: ^0.7.9  # Phiên bản của dart_eval
+

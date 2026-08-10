@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"math"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -465,4 +466,68 @@ func parseQS(qs string) map[string]string {
 		}
 	}
 	return out
+}
+
+func normalizeSSRCacheQuery(qs string) string {
+	qs = strings.TrimSpace(qs)
+	if qs == "" {
+		return ""
+	}
+
+	dropKeys := map[string]struct{}{
+		"utm_source":   {},
+		"utm_medium":   {},
+		"utm_campaign": {},
+		"utm_term":     {},
+		"utm_content":  {},
+		"utm_id":       {},
+		"gclid":        {},
+		"fbclid":       {},
+		"msclkid":      {},
+		"_ga":          {},
+		"_gl":          {},
+	}
+
+	params := parseQS(qs)
+	if len(params) == 0 {
+		return ""
+	}
+
+	keys := make([]string, 0, len(params))
+	for k := range params {
+		if _, drop := dropKeys[strings.ToLower(strings.TrimSpace(k))]; drop {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	if len(keys) == 0 {
+		return ""
+	}
+
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+url.QueryEscape(params[k]))
+	}
+	return strings.Join(parts, "&")
+}
+
+func isSafeSSRCacheQuery(qs string) bool {
+	qs = strings.TrimSpace(qs)
+	if qs == "" {
+		return true
+	}
+	params := parseQS(qs)
+	if len(params) == 0 {
+		return true
+	}
+	for k := range params {
+		switch strings.ToLower(strings.TrimSpace(k)) {
+		case "hl", "__host", "ssr_host":
+			continue
+		default:
+			return false
+		}
+	}
+	return true
 }

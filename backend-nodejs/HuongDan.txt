@@ -1,0 +1,44 @@
+# Tạo SSL cho Server Ubuntu
+sudo apt install certbot python3-certbot-nginx
+sudo nginx -t
+sudo systemctl reload nginx
+sudo certbot --nginx -d phongthuyphattam.net -d www.phongthuyphattam.net -d www.vn369.net -d vn369.net -d phanmem.vn369.net -d livestream.vn369.net -d mediasoup.vn369.net
+sudo certbot --nginx -d phongthuyphattam.net -d www.phongthuyphattam.net -d php.phongthuyphattam.net
+sudo certbot --nginx \
+  -d phongthuyphattam.net \
+  -d www.phongthuyphattam.net \
+  -d php.phongthuyphattam.net 
+Live Stream
+// // youtube
+// ffmpeg -re -i D:\HinhAnh\west_lake_golf_villa\Flycam.mp4 -c copy -f flv rtmp://a.rtmp.youtube.com/live2/xatd-kk78-cph0-6d2r-2r9t
+// // Facebook 
+// ffmpeg -re -y -i /root/sca4u_server/public/Flycam.mp4 -c:a copy -ac 1 -ar 44100 -b:a 96k -vcodec libx264 -pix_fmt yuv420p -tune zerolatency -f flv -maxrate 2000k -preset veryfast "rtmps://live-api-s.facebook.com:443/rtmp/FB-736101454971826-0-AbxzQ5vMDdLOq9X_"
+Hướng dẫn cài SSL cho Jetty Server
+//openssl pkcs12 -export -out your_pfx_certificate.pfx -inkey your_private.key -in your_pem_certificate.crt -certfile CA-bundle.crt
+openssl pkcs12 -export -out westlakevilla_vn.pfx -inkey westlakevilla_vn.key -in westlakevilla_vn.crt -certfile westlakevilla_vn.ca-bundle
+keytool -importkeystore -srckeystore  westlakevilla_vn.pfx  -srcstoretype pkcs12 -destkeystore  westlakevilla_vn.jks -deststoretype jks 
+
+openssl pkcs12 -export -out apps_phanmemmottrieu_net.pfx -inkey apps_phanmemmottrieu_net_csr_private_key.txt -in apps_phanmemmottrieu_net.crt -certfile apps_phanmemmottrieu_net.ca-bundle
+keytool -importkeystore -srckeystore  apps_phanmemmottrieu_net.pfx  -srcstoretype pkcs12 -destkeystore  apps_phanmemmottrieu_net.jks -deststoretype jks
+
+openssl pkcs12 -export -out phanmemmottrieu_net.pfx -inkey phanmemmottrieu_net_csr_private_key.txt  -in phanmemmottrieu_net.crt -certfile phanmemmottrieu_net.ca-bundle
+keytool -importkeystore -srckeystore  phanmemmottrieu_net.pfx  -srcstoretype pkcs12 -destkeystore  phanmemmottrieu_net.jks -deststoretype jks
+
+openssl pkcs12 -export -out vn369_net.pfx -inkey vn369_net_csr_private_key.txt -in vn369_net.crt -certfile vn369_net.ca-bundle
+keytool -importkeystore -srckeystore  vn369_net.pfx  -srcstoretype pkcs12 -destkeystore  vn369_net.jks -deststoretype jks
+
+Tao file p12 de merge
+//keytool -importkeystore -srckeystore [MY_KEYSTORE.jks] -destkeystore [MY_FILE.p12] -srcstoretype JKS -deststoretype PKCS12 -deststorepass [PASSWORD_PKCS12]
+
+keytool -importkeystore -srckeystore westlakevilla_vn.jks -destkeystore westlakevilla_vn.p12 -srcstoretype JKS -deststoretype PKCS12 -deststorepass BbAa@7975
+keytool -importkeystore -srckeystore phucangarden_net.jks -destkeystore phucangarden_net.p12 -srcstoretype JKS -deststoretype PKCS12 -deststorepass BbAa@7975
+keytool -importkeystore -srckeystore phanmemmottrieu_net.jks -destkeystore phanmemmottrieu_net.p12 -srcstoretype JKS -deststoretype PKCS12 -deststorepass BbAa@7975
+keytool -importkeystore -srckeystore vn369_net.jks -destkeystore vn369_net.p12 -srcstoretype JKS -deststoretype PKCS12 -deststorepass BbAa@7975
+keytool -importkeystore -srckeystore apps_phanmemmottrieu_net.jks -destkeystore apps_phanmemmottrieu_net.p12 -srcstoretype JKS -deststoretype PKCS12 -deststorepass BbAa@7975
+
+Merging p12 vua tao vao 1 JKS Files
+keytool -importkeystore -srckeystore westlakevilla_vn.p12 -destkeystore sca4u_ssl.jks -srcstoretype pkcs12
+keytool -importkeystore -srckeystore phucangarden_net.p12 -destkeystore sca4u_ssl.jks -srcstoretype pkcs12
+keytool -importkeystore -srckeystore phanmemmottrieu_net.p12 -destkeystore sca4u_ssl.jks -srcstoretype pkcs12
+keytool -importkeystore -srckeystore apps_phanmemmottrieu_net.p12 -destkeystore sca4u_ssl.jks -srcstoretype pkcs12
+keytool -importkeystore -srckeystore vn369_net.p12 -destkeystore sca4u_ssl.jks -srcstoretype pkcs12

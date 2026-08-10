@@ -1,0 +1,4314 @@
+[
+    {
+        "name": "Việt Nam",
+        "code": 0,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            }
+        ]
+    },
+    {
+        "name": "Hồ Chí Minh",
+        "code": 79,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Quận 1",
+                "code": 760,
+                "vn-name": "Quận 1"
+            },
+            {
+                "name": "Quận 12",
+                "code": 761,
+                "vn-name": "Quận 12"
+            },
+            {
+                "name": "Thủ Đức",
+                "code": 762,
+                "vn-name": "Thủ Đức"
+            },
+            {
+                "name": "Quận 9",
+                "code": 763,
+                "vn-name": "Quận 9"
+            },
+            {
+                "name": "Gò Vấp",
+                "code": 764,
+                "vn-name": "Gò Vấp"
+            },
+            {
+                "name": "Bình Thạnh",
+                "code": 765,
+                "vn-name": "Bình Thạnh"
+            },
+            {
+                "name": "Tân Bình",
+                "code": 766,
+                "vn-name": "Tân Bình"
+            },
+            {
+                "name": "Tân Phú",
+                "code": 767,
+                "vn-name": "Tân Phú"
+            },
+            {
+                "name": "Phú Nhuận",
+                "code": 768,
+                "vn-name": "Phú Nhuận"
+            },
+            {
+                "name": "Quận 2",
+                "code": 769,
+                "vn-name": "Quận 2"
+            },
+            {
+                "name": "Quận 3",
+                "code": 770,
+                "vn-name": "Quận 3"
+            },
+            {
+                "name": "Quận 10",
+                "code": 771,
+                "vn-name": "Quận 10"
+            },
+            {
+                "name": "Quận 11",
+                "code": 772,
+                "vn-name": "Quận 11"
+            },
+            {
+                "name": "Quận 4",
+                "code": 773,
+                "vn-name": "Quận 4"
+            },
+            {
+                "name": "Quận 5",
+                "code": 774,
+                "vn-name": "Quận 5"
+            },
+            {
+                "name": "Quận 6",
+                "code": 775,
+                "vn-name": "Quận 6"
+            },
+            {
+                "name": "Quận 8",
+                "code": 776,
+                "vn-name": "Quận 8"
+            },
+            {
+                "name": "Bình Tân",
+                "code": 777,
+                "vn-name": "Bình Tân"
+            },
+            {
+                "name": "Quận 7",
+                "code": 778,
+                "vn-name": "Quận 7"
+            },
+            {
+                "name": "Củ Chi",
+                "code": 783,
+                "vn-name": "Củ Chi"
+            },
+            {
+                "name": "Hóc Môn",
+                "code": 784,
+                "vn-name": "Hóc Môn"
+            },
+            {
+                "name": "Bình Chánh",
+                "code": 785,
+                "vn-name": "Bình Chánh"
+            },
+            {
+                "name": "Nhà Bè",
+                "code": 786,
+                "vn-name": "Nhà Bè"
+            },
+            {
+                "name": "Cần Giờ",
+                "code": 787,
+                "vn-name": "Cần Giờ"
+            }
+        ],
+        "vn-name": "Hồ Chí Minh"
+    },
+    {
+        "name": "An Giang",
+        "code": 89,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Long Xuyên",
+                "code": 883,
+                "vn-name": "Long Xuyên"
+            },
+            {
+                "name": "Châu Đốc",
+                "code": 884,
+                "vn-name": "Châu Đốc"
+            },
+            {
+                "name": "An Phú",
+                "code": 886,
+                "vn-name": "An Phú"
+            },
+            {
+                "name": "Tân Châu",
+                "code": 887,
+                "vn-name": "Tân Châu"
+            },
+            {
+                "name": "Phú Tân",
+                "code": 888,
+                "vn-name": "Phú Tân"
+            },
+            {
+                "name": "Châu Phú",
+                "code": 889,
+                "vn-name": "Châu Phú"
+            },
+            {
+                "name": "Tịnh Biên",
+                "code": 890,
+                "vn-name": "Tịnh Biên"
+            },
+            {
+                "name": "Tri Tôn",
+                "code": 891,
+                "vn-name": "Tri Tôn"
+            },
+            {
+                "name": "Châu Thành",
+                "code": 892,
+                "vn-name": "Châu Thành"
+            },
+            {
+                "name": "Chợ Mới",
+                "code": 893,
+                "vn-name": "Chợ Mới"
+            },
+            {
+                "name": "Thoại Sơn",
+                "code": 894,
+                "vn-name": "Thoại Sơn"
+            }
+        ],
+        "vn-name": "An Giang"
+    },
+    {
+        "name": "Kon Tum",
+        "code": 62,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Kon Tum",
+                "code": 608,
+                "vn-name": "Kon Tum"
+            },
+            {
+                "name": "Đắk Glei",
+                "code": 610,
+                "vn-name": "Đắk Glei"
+            },
+            {
+                "name": "Ngọc Hồi",
+                "code": 611,
+                "vn-name": "Ngọc Hồi"
+            },
+            {
+                "name": "Đắk Tô",
+                "code": 612,
+                "vn-name": "Đắk Tô"
+            },
+            {
+                "name": "Kon Plông",
+                "code": 613,
+                "vn-name": "Kon Plông"
+            },
+            {
+                "name": "Kon Rẫy",
+                "code": 614,
+                "vn-name": "Kon Rẫy"
+            },
+            {
+                "name": "Đắk Hà",
+                "code": 615,
+                "vn-name": "Đắk Hà"
+            },
+            {
+                "name": "Sa Thầy",
+                "code": 616,
+                "vn-name": "Sa Thầy"
+            },
+            {
+                "name": "Tu Mơ Rông",
+                "code": 617,
+                "vn-name": "Tu Mơ Rông"
+            },
+            {
+                "name": "Ia H' Drai",
+                "code": 618,
+                "vn-name": "Ia H' Drai"
+            }
+        ],
+        "vn-name": "Kon Tum"
+    },
+    {
+        "name": "Đắk Nông",
+        "code": 67,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Gia Nghĩa",
+                "code": 660,
+                "vn-name": "Gia Nghĩa"
+            },
+            {
+                "name": "Đăk Glong",
+                "code": 661,
+                "vn-name": "Đăk Glong"
+            },
+            {
+                "name": "Cư Jút",
+                "code": 662,
+                "vn-name": "Cư Jút"
+            },
+            {
+                "name": "Đắk Mil",
+                "code": 663,
+                "vn-name": "Đắk Mil"
+            },
+            {
+                "name": "Krông Nô",
+                "code": 664,
+                "vn-name": "Krông Nô"
+            },
+            {
+                "name": "Đắk Song",
+                "code": 665,
+                "vn-name": "Đắk Song"
+            },
+            {
+                "name": "Đắk R'Lấp",
+                "code": 666,
+                "vn-name": "Đắk R'Lấp"
+            },
+            {
+                "name": "Tuy Đức",
+                "code": 667,
+                "vn-name": "Tuy Đức"
+            }
+        ],
+        "vn-name": "Đắk Nông"
+    },
+    {
+        "name": "Sóc Trăng",
+        "code": 94,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Sóc Trăng",
+                "code": 941,
+                "vn-name": "Sóc Trăng"
+            },
+            {
+                "name": "Châu Thành",
+                "code": 942,
+                "vn-name": "Châu Thành"
+            },
+            {
+                "name": "Kế Sách",
+                "code": 943,
+                "vn-name": "Kế Sách"
+            },
+            {
+                "name": "Mỹ Tú",
+                "code": 944,
+                "vn-name": "Mỹ Tú"
+            },
+            {
+                "name": "Cù Lao Dung",
+                "code": 945,
+                "vn-name": "Cù Lao Dung"
+            },
+            {
+                "name": "Long Phú",
+                "code": 946,
+                "vn-name": "Long Phú"
+            },
+            {
+                "name": "Mỹ Xuyên",
+                "code": 947,
+                "vn-name": "Mỹ Xuyên"
+            },
+            {
+                "name": "Ngã Năm",
+                "code": 948,
+                "vn-name": "Ngã Năm"
+            },
+            {
+                "name": "Thạnh Trị",
+                "code": 949,
+                "vn-name": "Thạnh Trị"
+            },
+            {
+                "name": "Vĩnh Châu",
+                "code": 950,
+                "vn-name": "Vĩnh Châu"
+            },
+            {
+                "name": "Trần Đề",
+                "code": 951,
+                "vn-name": "Trần Đề"
+            }
+        ],
+        "vn-name": "Sóc Trăng"
+    },
+    {
+        "name": "Bình Phước",
+        "code": 70,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Phước Long",
+                "code": 688,
+                "vn-name": "Phước Long"
+            },
+            {
+                "name": "Đồng Xoài",
+                "code": 689,
+                "vn-name": "Đồng Xoài"
+            },
+            {
+                "name": "Bình Long",
+                "code": 690,
+                "vn-name": "Bình Long"
+            },
+            {
+                "name": "Bù Gia Mập",
+                "code": 691,
+                "vn-name": "Bù Gia Mập"
+            },
+            {
+                "name": "Lộc Ninh",
+                "code": 692,
+                "vn-name": "Lộc Ninh"
+            },
+            {
+                "name": "Bù Đốp",
+                "code": 693,
+                "vn-name": "Bù Đốp"
+            },
+            {
+                "name": "Hớn Quản",
+                "code": 694,
+                "vn-name": "Hớn Quản"
+            },
+            {
+                "name": "Đồng Phú",
+                "code": 695,
+                "vn-name": "Đồng Phú"
+            },
+            {
+                "name": "Bù Đăng",
+                "code": 696,
+                "vn-name": "Bù Đăng"
+            },
+            {
+                "name": "Chơn Thành",
+                "code": 697,
+                "vn-name": "Chơn Thành"
+            },
+            {
+                "name": "Phú Riềng",
+                "code": 698,
+                "vn-name": "Phú Riềng"
+            }
+        ],
+        "vn-name": "Bình Phước"
+    },
+    {
+        "name": "Hưng Yên",
+        "code": 33,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Hưng Yên",
+                "code": 323,
+                "vn-name": "Hưng Yên"
+            },
+            {
+                "name": "Văn Lâm",
+                "code": 325,
+                "vn-name": "Văn Lâm"
+            },
+            {
+                "name": "Văn Giang",
+                "code": 326,
+                "vn-name": "Văn Giang"
+            },
+            {
+                "name": "Yên Mỹ",
+                "code": 327,
+                "vn-name": "Yên Mỹ"
+            },
+            {
+                "name": "Mỹ Hào",
+                "code": 328,
+                "vn-name": "Mỹ Hào"
+            },
+            {
+                "name": "Ân Thi",
+                "code": 329,
+                "vn-name": "Ân Thi"
+            },
+            {
+                "name": "Khoái Châu",
+                "code": 330,
+                "vn-name": "Khoái Châu"
+            },
+            {
+                "name": "Kim Động",
+                "code": 331,
+                "vn-name": "Kim Động"
+            },
+            {
+                "name": "Tiên Lữ",
+                "code": 332,
+                "vn-name": "Tiên Lữ"
+            },
+            {
+                "name": "Phù Cừ",
+                "code": 333,
+                "vn-name": "Phù Cừ"
+            }
+        ],
+        "vn-name": "Hưng Yên"
+    },
+    {
+        "name": "Thanh Hóa",
+        "code": 38,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Thanh Hóa",
+                "code": 380,
+                "vn-name": "Thanh Hóa"
+            },
+            {
+                "name": "Bỉm Sơn",
+                "code": 381,
+                "vn-name": "Bỉm Sơn"
+            },
+            {
+                "name": "Sầm Sơn",
+                "code": 382,
+                "vn-name": "Sầm Sơn"
+            },
+            {
+                "name": "Mường Lát",
+                "code": 384,
+                "vn-name": "Mường Lát"
+            },
+            {
+                "name": "Quan Hóa",
+                "code": 385,
+                "vn-name": "Quan Hóa"
+            },
+            {
+                "name": "Bá Thước",
+                "code": 386,
+                "vn-name": "Bá Thước"
+            },
+            {
+                "name": "Quan Sơn",
+                "code": 387,
+                "vn-name": "Quan Sơn"
+            },
+            {
+                "name": "Lang Chánh",
+                "code": 388,
+                "vn-name": "Lang Chánh"
+            },
+            {
+                "name": "Ngọc Lặc",
+                "code": 389,
+                "vn-name": "Ngọc Lặc"
+            },
+            {
+                "name": "Cẩm Thủy",
+                "code": 390,
+                "vn-name": "Cẩm Thủy"
+            },
+            {
+                "name": "Thạch Thành",
+                "code": 391,
+                "vn-name": "Thạch Thành"
+            },
+            {
+                "name": "Hà Trung",
+                "code": 392,
+                "vn-name": "Hà Trung"
+            },
+            {
+                "name": "Vĩnh Lộc",
+                "code": 393,
+                "vn-name": "Vĩnh Lộc"
+            },
+            {
+                "name": "Yên Định",
+                "code": 394,
+                "vn-name": "Yên Định"
+            },
+            {
+                "name": "Thọ Xuân",
+                "code": 395,
+                "vn-name": "Thọ Xuân"
+            },
+            {
+                "name": "Thường Xuân",
+                "code": 396,
+                "vn-name": "Thường Xuân"
+            },
+            {
+                "name": "Triệu Sơn",
+                "code": 397,
+                "vn-name": "Triệu Sơn"
+            },
+            {
+                "name": "Thiệu Hóa",
+                "code": 398,
+                "vn-name": "Thiệu Hóa"
+            },
+            {
+                "name": "Hoằng Hóa",
+                "code": 399,
+                "vn-name": "Hoằng Hóa"
+            },
+            {
+                "name": "Hậu Lộc",
+                "code": 400,
+                "vn-name": "Hậu Lộc"
+            },
+            {
+                "name": "Nga Sơn",
+                "code": 401,
+                "vn-name": "Nga Sơn"
+            },
+            {
+                "name": "Như Xuân",
+                "code": 402,
+                "vn-name": "Như Xuân"
+            },
+            {
+                "name": "Như Thanh",
+                "code": 403,
+                "vn-name": "Như Thanh"
+            },
+            {
+                "name": "Nông Cống",
+                "code": 404,
+                "vn-name": "Nông Cống"
+            },
+            {
+                "name": "Đông Sơn",
+                "code": 405,
+                "vn-name": "Đông Sơn"
+            },
+            {
+                "name": "Quảng Xương",
+                "code": 406,
+                "vn-name": "Quảng Xương"
+            },
+            {
+                "name": "Tĩnh Gia",
+                "code": 407,
+                "vn-name": "Tĩnh Gia"
+            }
+        ],
+        "vn-name": "Thanh Hóa"
+    },
+    {
+        "name": "Quảng Trị",
+        "code": 45,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Đông Hà",
+                "code": 461,
+                "vn-name": "Đông Hà"
+            },
+            {
+                "name": "Quảng Trị",
+                "code": 462,
+                "vn-name": "Quảng Trị"
+            },
+            {
+                "name": "Vĩnh Linh",
+                "code": 464,
+                "vn-name": "Vĩnh Linh"
+            },
+            {
+                "name": "Hướng Hóa",
+                "code": 465,
+                "vn-name": "Hướng Hóa"
+            },
+            {
+                "name": "Gio Linh",
+                "code": 466,
+                "vn-name": "Gio Linh"
+            },
+            {
+                "name": "Đa Krông",
+                "code": 467,
+                "vn-name": "Đa Krông"
+            },
+            {
+                "name": "Cam Lộ",
+                "code": 468,
+                "vn-name": "Cam Lộ"
+            },
+            {
+                "name": "Triệu Phong",
+                "code": 469,
+                "vn-name": "Triệu Phong"
+            },
+            {
+                "name": "Hải Lăng",
+                "code": 470,
+                "vn-name": "Hải Lăng"
+            }
+        ],
+        "vn-name": "Quảng Trị"
+    },
+    {
+        "name": "Tuyên Quang",
+        "code": 8,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Tuyên Quang",
+                "code": 70,
+                "vn-name": "Tuyên Quang"
+            },
+            {
+                "name": "Lâm Bình",
+                "code": 71,
+                "vn-name": "Lâm Bình"
+            },
+            {
+                "name": "Nà Hang",
+                "code": 72,
+                "vn-name": "Nà Hang"
+            },
+            {
+                "name": "Chiêm Hóa",
+                "code": 73,
+                "vn-name": "Chiêm Hóa"
+            },
+            {
+                "name": "Hàm Yên",
+                "code": 74,
+                "vn-name": "Hàm Yên"
+            },
+            {
+                "name": "Yên Sơn",
+                "code": 75,
+                "vn-name": "Yên Sơn"
+            },
+            {
+                "name": "Sơn Dương",
+                "code": 76,
+                "vn-name": "Sơn Dương"
+            }
+        ],
+        "vn-name": "Tuyên Quang"
+    },
+    {
+        "name": "Quảng Ngãi",
+        "code": 51,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Quảng Ngãi",
+                "code": 522,
+                "vn-name": "Quảng Ngãi"
+            },
+            {
+                "name": "Bình Sơn",
+                "code": 524,
+                "vn-name": "Bình Sơn"
+            },
+            {
+                "name": "Trà Bồng",
+                "code": 525,
+                "vn-name": "Trà Bồng"
+            },
+            {
+                "name": "Tây Trà",
+                "code": 526,
+                "vn-name": "Tây Trà"
+            },
+            {
+                "name": "Sơn Tịnh",
+                "code": 527,
+                "vn-name": "Sơn Tịnh"
+            },
+            {
+                "name": "Tư Nghĩa",
+                "code": 528,
+                "vn-name": "Tư Nghĩa"
+            },
+            {
+                "name": "Sơn Hà",
+                "code": 529,
+                "vn-name": "Sơn Hà"
+            },
+            {
+                "name": "Sơn Tây",
+                "code": 530,
+                "vn-name": "Sơn Tây"
+            },
+            {
+                "name": "Minh Long",
+                "code": 531,
+                "vn-name": "Minh Long"
+            },
+            {
+                "name": "Nghĩa Hành",
+                "code": 532,
+                "vn-name": "Nghĩa Hành"
+            },
+            {
+                "name": "Mộ Đức",
+                "code": 533,
+                "vn-name": "Mộ Đức"
+            },
+            {
+                "name": "Đức Phổ",
+                "code": 534,
+                "vn-name": "Đức Phổ"
+            },
+            {
+                "name": "Ba Tơ",
+                "code": 535,
+                "vn-name": "Ba Tơ"
+            },
+            {
+                "name": "Lý Sơn",
+                "code": 536,
+                "vn-name": "Lý Sơn"
+            }
+        ],
+        "vn-name": "Quảng Ngãi"
+    },
+    {
+        "name": "Hà Nội",
+        "code": 1,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Ba Đình",
+                "code": 1,
+                "vn-name": "Ba Đình"
+            },
+            {
+                "name": "Hoàn Kiếm",
+                "code": 2,
+                "vn-name": "Hoàn Kiếm"
+            },
+            {
+                "name": "Tây Hồ",
+                "code": 3,
+                "vn-name": "Tây Hồ"
+            },
+            {
+                "name": "Long Biên",
+                "code": 4,
+                "vn-name": "Long Biên"
+            },
+            {
+                "name": "Cầu Giấy",
+                "code": 5,
+                "vn-name": "Cầu Giấy"
+            },
+            {
+                "name": "Đống Đa",
+                "code": 6,
+                "vn-name": "Đống Đa"
+            },
+            {
+                "name": "Hai Bà Trưng",
+                "code": 7,
+                "vn-name": "Hai Bà Trưng"
+            },
+            {
+                "name": "Hoàng Mai",
+                "code": 8,
+                "vn-name": "Hoàng Mai"
+            },
+            {
+                "name": "Thanh Xuân",
+                "code": 9,
+                "vn-name": "Thanh Xuân"
+            },
+            {
+                "name": "Sóc Sơn",
+                "code": 16,
+                "vn-name": "Sóc Sơn"
+            },
+            {
+                "name": "Đông Anh",
+                "code": 17,
+                "vn-name": "Đông Anh"
+            },
+            {
+                "name": "Gia Lâm",
+                "code": 18,
+                "vn-name": "Gia Lâm"
+            },
+            {
+                "name": "Nam Từ Liêm",
+                "code": 19,
+                "vn-name": "Nam Từ Liêm"
+            },
+            {
+                "name": "Thanh Trì",
+                "code": 20,
+                "vn-name": "Thanh Trì"
+            },
+            {
+                "name": "Bắc Từ Liêm",
+                "code": 21,
+                "vn-name": "Bắc Từ Liêm"
+            },
+            {
+                "name": "Mê Linh",
+                "code": 250,
+                "vn-name": "Mê Linh"
+            },
+            {
+                "name": "Hà Đông",
+                "code": 268,
+                "vn-name": "Hà Đông"
+            },
+            {
+                "name": "Sơn Tây",
+                "code": 269,
+                "vn-name": "Sơn Tây"
+            },
+            {
+                "name": "Ba Vì",
+                "code": 271,
+                "vn-name": "Ba Vì"
+            },
+            {
+                "name": "Phúc Thọ",
+                "code": 272,
+                "vn-name": "Phúc Thọ"
+            },
+            {
+                "name": "Đan Phượng",
+                "code": 273,
+                "vn-name": "Đan Phượng"
+            },
+            {
+                "name": "Hoài Đức",
+                "code": 274,
+                "vn-name": "Hoài Đức"
+            },
+            {
+                "name": "Quốc Oai",
+                "code": 275,
+                "vn-name": "Quốc Oai"
+            },
+            {
+                "name": "Thạch Thất",
+                "code": 276,
+                "vn-name": "Thạch Thất"
+            },
+            {
+                "name": "Chương Mỹ",
+                "code": 277,
+                "vn-name": "Chương Mỹ"
+            },
+            {
+                "name": "Thanh Oai",
+                "code": 278,
+                "vn-name": "Thanh Oai"
+            },
+            {
+                "name": "Thường Tín",
+                "code": 279,
+                "vn-name": "Thường Tín"
+            },
+            {
+                "name": "Phú Xuyên",
+                "code": 280,
+                "vn-name": "Phú Xuyên"
+            },
+            {
+                "name": "Ứng Hòa",
+                "code": 281,
+                "vn-name": "Ứng Hòa"
+            },
+            {
+                "name": "Mỹ Đức",
+                "code": 282,
+                "vn-name": "Mỹ Đức"
+            }
+        ],
+        "vn-name": "Hà Nội"
+    },
+    {
+        "name": "Lào Cai",
+        "code": 10,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Lào Cai",
+                "code": 80,
+                "vn-name": "Lào Cai"
+            },
+            {
+                "name": "Bát Xát",
+                "code": 82,
+                "vn-name": "Bát Xát"
+            },
+            {
+                "name": "Mường Khương",
+                "code": 83,
+                "vn-name": "Mường Khương"
+            },
+            {
+                "name": "Si Ma Cai",
+                "code": 84,
+                "vn-name": "Si Ma Cai"
+            },
+            {
+                "name": "Bắc Hà",
+                "code": 85,
+                "vn-name": "Bắc Hà"
+            },
+            {
+                "name": "Bảo Thắng",
+                "code": 86,
+                "vn-name": "Bảo Thắng"
+            },
+            {
+                "name": "Bảo Yên",
+                "code": 87,
+                "vn-name": "Bảo Yên"
+            },
+            {
+                "name": "Sa Pa",
+                "code": 88,
+                "vn-name": "Sa Pa"
+            },
+            {
+                "name": "Văn Bàn",
+                "code": 89,
+                "vn-name": "Văn Bàn"
+            }
+        ],
+        "vn-name": "Lào Cai"
+    },
+    {
+        "name": "Vĩnh Long",
+        "code": 86,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Vĩnh Long",
+                "code": 855,
+                "vn-name": "Vĩnh Long"
+            },
+            {
+                "name": "Long Hồ",
+                "code": 857,
+                "vn-name": "Long Hồ"
+            },
+            {
+                "name": "Mang Thít",
+                "code": 858,
+                "vn-name": "Mang Thít"
+            },
+            {
+                "name": "Vũng Liêm",
+                "code": 859,
+                "vn-name": "Vũng Liêm"
+            },
+            {
+                "name": "Tam Bình",
+                "code": 860,
+                "vn-name": "Tam Bình"
+            },
+            {
+                "name": "Bình Minh",
+                "code": 861,
+                "vn-name": "Bình Minh"
+            },
+            {
+                "name": "Trà Ôn",
+                "code": 862,
+                "vn-name": "Trà Ôn"
+            },
+            {
+                "name": "Bình Tân",
+                "code": 863,
+                "vn-name": "Bình Tân"
+            }
+        ],
+        "vn-name": "Vĩnh Long"
+    },
+    {
+        "name": "Lâm Đồng",
+        "code": 68,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Đà Lạt",
+                "code": 672,
+                "vn-name": "Đà Lạt"
+            },
+            {
+                "name": "Bảo Lộc",
+                "code": 673,
+                "vn-name": "Bảo Lộc"
+            },
+            {
+                "name": "Đam Rông",
+                "code": 674,
+                "vn-name": "Đam Rông"
+            },
+            {
+                "name": "Lạc Dương",
+                "code": 675,
+                "vn-name": "Lạc Dương"
+            },
+            {
+                "name": "Lâm Hà",
+                "code": 676,
+                "vn-name": "Lâm Hà"
+            },
+            {
+                "name": "Đơn Dương",
+                "code": 677,
+                "vn-name": "Đơn Dương"
+            },
+            {
+                "name": "Đức Trọng",
+                "code": 678,
+                "vn-name": "Đức Trọng"
+            },
+            {
+                "name": "Di Linh",
+                "code": 679,
+                "vn-name": "Di Linh"
+            },
+            {
+                "name": "Bảo Lâm",
+                "code": 680,
+                "vn-name": "Bảo Lâm"
+            },
+            {
+                "name": "Đạ Huoai",
+                "code": 681,
+                "vn-name": "Đạ Huoai"
+            },
+            {
+                "name": "Đạ Tẻh",
+                "code": 682,
+                "vn-name": "Đạ Tẻh"
+            },
+            {
+                "name": "Cát Tiên",
+                "code": 683,
+                "vn-name": "Cát Tiên"
+            }
+        ],
+        "vn-name": "Lâm Đồng"
+    },
+    {
+        "name": "Bình Định",
+        "code": 52,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Qui Nhơn",
+                "code": 540,
+                "vn-name": "Qui Nhơn"
+            },
+            {
+                "name": "An Lão",
+                "code": 542,
+                "vn-name": "An Lão"
+            },
+            {
+                "name": "Hoài Nhơn",
+                "code": 543,
+                "vn-name": "Hoài Nhơn"
+            },
+            {
+                "name": "Hoài Ân",
+                "code": 544,
+                "vn-name": "Hoài Ân"
+            },
+            {
+                "name": "Phù Mỹ",
+                "code": 545,
+                "vn-name": "Phù Mỹ"
+            },
+            {
+                "name": "Vĩnh Thạnh",
+                "code": 546,
+                "vn-name": "Vĩnh Thạnh"
+            },
+            {
+                "name": "Tây Sơn",
+                "code": 547,
+                "vn-name": "Tây Sơn"
+            },
+            {
+                "name": "Phù Cát",
+                "code": 548,
+                "vn-name": "Phù Cát"
+            },
+            {
+                "name": "An Nhơn",
+                "code": 549,
+                "vn-name": "An Nhơn"
+            },
+            {
+                "name": "Tuy Phước",
+                "code": 550,
+                "vn-name": "Tuy Phước"
+            },
+            {
+                "name": "Vân Canh",
+                "code": 551,
+                "vn-name": "Vân Canh"
+            }
+        ],
+        "vn-name": "Bình Định"
+    },
+    {
+        "name": "Nghệ An",
+        "code": 40,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Vinh",
+                "code": 412,
+                "vn-name": "Vinh"
+            },
+            {
+                "name": "Cửa Lò",
+                "code": 413,
+                "vn-name": "Cửa Lò"
+            },
+            {
+                "name": "Thái Hoà",
+                "code": 414,
+                "vn-name": "Thái Hoà"
+            },
+            {
+                "name": "Quế Phong",
+                "code": 415,
+                "vn-name": "Quế Phong"
+            },
+            {
+                "name": "Quỳ Châu",
+                "code": 416,
+                "vn-name": "Quỳ Châu"
+            },
+            {
+                "name": "Kỳ Sơn",
+                "code": 417,
+                "vn-name": "Kỳ Sơn"
+            },
+            {
+                "name": "Tương Dương",
+                "code": 418,
+                "vn-name": "Tương Dương"
+            },
+            {
+                "name": "Nghĩa Đàn",
+                "code": 419,
+                "vn-name": "Nghĩa Đàn"
+            },
+            {
+                "name": "Quỳ Hợp",
+                "code": 420,
+                "vn-name": "Quỳ Hợp"
+            },
+            {
+                "name": "Quỳnh Lưu",
+                "code": 421,
+                "vn-name": "Quỳnh Lưu"
+            },
+            {
+                "name": "Con Cuông",
+                "code": 422,
+                "vn-name": "Con Cuông"
+            },
+            {
+                "name": "Tân Kỳ",
+                "code": 423,
+                "vn-name": "Tân Kỳ"
+            },
+            {
+                "name": "Anh Sơn",
+                "code": 424,
+                "vn-name": "Anh Sơn"
+            },
+            {
+                "name": "Diễn Châu",
+                "code": 425,
+                "vn-name": "Diễn Châu"
+            },
+            {
+                "name": "Yên Thành",
+                "code": 426,
+                "vn-name": "Yên Thành"
+            },
+            {
+                "name": "Đô Lương",
+                "code": 427,
+                "vn-name": "Đô Lương"
+            },
+            {
+                "name": "Thanh Chương",
+                "code": 428,
+                "vn-name": "Thanh Chương"
+            },
+            {
+                "name": "Nghi Lộc",
+                "code": 429,
+                "vn-name": "Nghi Lộc"
+            },
+            {
+                "name": "Nam Đàn",
+                "code": 430,
+                "vn-name": "Nam Đàn"
+            },
+            {
+                "name": "Hưng Nguyên",
+                "code": 431,
+                "vn-name": "Hưng Nguyên"
+            },
+            {
+                "name": "Hoàng Mai",
+                "code": 432,
+                "vn-name": "Hoàng Mai"
+            }
+        ],
+        "vn-name": "Nghệ An"
+    },
+    {
+        "name": "Kiên Giang",
+        "code": 91,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Rạch Giá",
+                "code": 899,
+                "vn-name": "Rạch Giá"
+            },
+            {
+                "name": "Hà Tiên",
+                "code": 900,
+                "vn-name": "Hà Tiên"
+            },
+            {
+                "name": "Kiên Lương",
+                "code": 902,
+                "vn-name": "Kiên Lương"
+            },
+            {
+                "name": "Hòn Đất",
+                "code": 903,
+                "vn-name": "Hòn Đất"
+            },
+            {
+                "name": "Tân Hiệp",
+                "code": 904,
+                "vn-name": "Tân Hiệp"
+            },
+            {
+                "name": "Châu Thành",
+                "code": 905,
+                "vn-name": "Châu Thành"
+            },
+            {
+                "name": "Giồng Riềng",
+                "code": 906,
+                "vn-name": "Giồng Riềng"
+            },
+            {
+                "name": "Gò Quao",
+                "code": 907,
+                "vn-name": "Gò Quao"
+            },
+            {
+                "name": "An Biên",
+                "code": 908,
+                "vn-name": "An Biên"
+            },
+            {
+                "name": "An Minh",
+                "code": 909,
+                "vn-name": "An Minh"
+            },
+            {
+                "name": "Vĩnh Thuận",
+                "code": 910,
+                "vn-name": "Vĩnh Thuận"
+            },
+            {
+                "name": "Phú Quốc",
+                "code": 911,
+                "vn-name": "Phú Quốc"
+            },
+            {
+                "name": "Kiên Hải",
+                "code": 912,
+                "vn-name": "Kiên Hải"
+            },
+            {
+                "name": "U Minh Thượng",
+                "code": 913,
+                "vn-name": "U Minh Thượng"
+            },
+            {
+                "name": "Giang Thành",
+                "code": 914,
+                "vn-name": "Giang Thành"
+            }
+        ],
+        "vn-name": "Kiên Giang"
+    },
+    {
+        "name": "Hà Giang",
+        "code": 2,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Hà Giang",
+                "code": 24,
+                "vn-name": "Hà Giang"
+            },
+            {
+                "name": "Đồng Văn",
+                "code": 26,
+                "vn-name": "Đồng Văn"
+            },
+            {
+                "name": "Mèo Vạc",
+                "code": 27,
+                "vn-name": "Mèo Vạc"
+            },
+            {
+                "name": "Yên Minh",
+                "code": 28,
+                "vn-name": "Yên Minh"
+            },
+            {
+                "name": "Quản Bạ",
+                "code": 29,
+                "vn-name": "Quản Bạ"
+            },
+            {
+                "name": "Vị Xuyên",
+                "code": 30,
+                "vn-name": "Vị Xuyên"
+            },
+            {
+                "name": "Bắc Mê",
+                "code": 31,
+                "vn-name": "Bắc Mê"
+            },
+            {
+                "name": "Hoàng Su Phì",
+                "code": 32,
+                "vn-name": "Hoàng Su Phì"
+            },
+            {
+                "name": "Xín Mần",
+                "code": 33,
+                "vn-name": "Xín Mần"
+            },
+            {
+                "name": "Bắc Quang",
+                "code": 34,
+                "vn-name": "Bắc Quang"
+            },
+            {
+                "name": "Quang Bình",
+                "code": 35,
+                "vn-name": "Quang Bình"
+            }
+        ],
+        "vn-name": "Hà Giang"
+    },
+    {
+        "name": "Phú Yên",
+        "code": 54,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Tuy Hoà",
+                "code": 555,
+                "vn-name": "Tuy Hoà"
+            },
+            {
+                "name": "Sông Cầu",
+                "code": 557,
+                "vn-name": "Sông Cầu"
+            },
+            {
+                "name": "Đồng Xuân",
+                "code": 558,
+                "vn-name": "Đồng Xuân"
+            },
+            {
+                "name": "Tuy An",
+                "code": 559,
+                "vn-name": "Tuy An"
+            },
+            {
+                "name": "Sơn Hòa",
+                "code": 560,
+                "vn-name": "Sơn Hòa"
+            },
+            {
+                "name": "Sông Hinh",
+                "code": 561,
+                "vn-name": "Sông Hinh"
+            },
+            {
+                "name": "Tây Hoà",
+                "code": 562,
+                "vn-name": "Tây Hoà"
+            },
+            {
+                "name": "Phú Hoà",
+                "code": 563,
+                "vn-name": "Phú Hoà"
+            },
+            {
+                "name": "Đông Hòa",
+                "code": 564,
+                "vn-name": "Đông Hòa"
+            }
+        ],
+        "vn-name": "Phú Yên"
+    },
+    {
+        "name": "Lạng Sơn",
+        "code": 20,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Lạng Sơn",
+                "code": 178,
+                "vn-name": "Lạng Sơn"
+            },
+            {
+                "name": "Tràng Định",
+                "code": 180,
+                "vn-name": "Tràng Định"
+            },
+            {
+                "name": "Bình Gia",
+                "code": 181,
+                "vn-name": "Bình Gia"
+            },
+            {
+                "name": "Văn Lãng",
+                "code": 182,
+                "vn-name": "Văn Lãng"
+            },
+            {
+                "name": "Cao Lộc",
+                "code": 183,
+                "vn-name": "Cao Lộc"
+            },
+            {
+                "name": "Văn Quan",
+                "code": 184,
+                "vn-name": "Văn Quan"
+            },
+            {
+                "name": "Bắc Sơn",
+                "code": 185,
+                "vn-name": "Bắc Sơn"
+            },
+            {
+                "name": "Hữu Lũng",
+                "code": 186,
+                "vn-name": "Hữu Lũng"
+            },
+            {
+                "name": "Chi Lăng",
+                "code": 187,
+                "vn-name": "Chi Lăng"
+            },
+            {
+                "name": "Lộc Bình",
+                "code": 188,
+                "vn-name": "Lộc Bình"
+            },
+            {
+                "name": "Đình Lập",
+                "code": 189,
+                "vn-name": "Đình Lập"
+            }
+        ],
+        "vn-name": "Lạng Sơn"
+    },
+    {
+        "name": "Đà Nẵng",
+        "code": 48,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Liên Chiểu",
+                "code": 490,
+                "vn-name": "Liên Chiểu"
+            },
+            {
+                "name": "Thanh Khê",
+                "code": 491,
+                "vn-name": "Thanh Khê"
+            },
+            {
+                "name": "Hải Châu",
+                "code": 492,
+                "vn-name": "Hải Châu"
+            },
+            {
+                "name": "Sơn Trà",
+                "code": 493,
+                "vn-name": "Sơn Trà"
+            },
+            {
+                "name": "Ngũ Hành Sơn",
+                "code": 494,
+                "vn-name": "Ngũ Hành Sơn"
+            },
+            {
+                "name": "Cẩm Lệ",
+                "code": 495,
+                "vn-name": "Cẩm Lệ"
+            },
+            {
+                "name": "Hòa Vang",
+                "code": 497,
+                "vn-name": "Hòa Vang"
+            }
+        ],
+        "vn-name": "Đà Nẵng"
+    },
+    {
+        "name": "Sơn La",
+        "code": 14,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Sơn La",
+                "code": 116,
+                "vn-name": "Sơn La"
+            },
+            {
+                "name": "Quỳnh Nhai",
+                "code": 118,
+                "vn-name": "Quỳnh Nhai"
+            },
+            {
+                "name": "Thuận Châu",
+                "code": 119,
+                "vn-name": "Thuận Châu"
+            },
+            {
+                "name": "Mường La",
+                "code": 120,
+                "vn-name": "Mường La"
+            },
+            {
+                "name": "Bắc Yên",
+                "code": 121,
+                "vn-name": "Bắc Yên"
+            },
+            {
+                "name": "Phù Yên",
+                "code": 122,
+                "vn-name": "Phù Yên"
+            },
+            {
+                "name": "Mộc Châu",
+                "code": 123,
+                "vn-name": "Mộc Châu"
+            },
+            {
+                "name": "Yên Châu",
+                "code": 124,
+                "vn-name": "Yên Châu"
+            },
+            {
+                "name": "Mai Sơn",
+                "code": 125,
+                "vn-name": "Mai Sơn"
+            },
+            {
+                "name": "Sông Mã",
+                "code": 126,
+                "vn-name": "Sông Mã"
+            },
+            {
+                "name": "Sốp Cộp",
+                "code": 127,
+                "vn-name": "Sốp Cộp"
+            },
+            {
+                "name": "Vân Hồ",
+                "code": 128,
+                "vn-name": "Vân Hồ"
+            }
+        ],
+        "vn-name": "Sơn La"
+    },
+    {
+        "name": "Tây Ninh",
+        "code": 72,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Tây Ninh",
+                "code": 703,
+                "vn-name": "Tây Ninh"
+            },
+            {
+                "name": "Tân Biên",
+                "code": 705,
+                "vn-name": "Tân Biên"
+            },
+            {
+                "name": "Tân Châu",
+                "code": 706,
+                "vn-name": "Tân Châu"
+            },
+            {
+                "name": "Dương Minh Châu",
+                "code": 707,
+                "vn-name": "Dương Minh Châu"
+            },
+            {
+                "name": "Châu Thành",
+                "code": 708,
+                "vn-name": "Châu Thành"
+            },
+            {
+                "name": "Hòa Thành",
+                "code": 709,
+                "vn-name": "Hòa Thành"
+            },
+            {
+                "name": "Gò Dầu",
+                "code": 710,
+                "vn-name": "Gò Dầu"
+            },
+            {
+                "name": "Bến Cầu",
+                "code": 711,
+                "vn-name": "Bến Cầu"
+            },
+            {
+                "name": "Trảng Bàng",
+                "code": 712,
+                "vn-name": "Trảng Bàng"
+            }
+        ],
+        "vn-name": "Tây Ninh"
+    },
+    {
+        "name": "Nam Định",
+        "code": 36,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Nam Định",
+                "code": 356,
+                "vn-name": "Nam Định"
+            },
+            {
+                "name": "Mỹ Lộc",
+                "code": 358,
+                "vn-name": "Mỹ Lộc"
+            },
+            {
+                "name": "Vụ Bản",
+                "code": 359,
+                "vn-name": "Vụ Bản"
+            },
+            {
+                "name": "Ý Yên",
+                "code": 360,
+                "vn-name": "Ý Yên"
+            },
+            {
+                "name": "Nghĩa Hưng",
+                "code": 361,
+                "vn-name": "Nghĩa Hưng"
+            },
+            {
+                "name": "Nam Trực",
+                "code": 362,
+                "vn-name": "Nam Trực"
+            },
+            {
+                "name": "Trực Ninh",
+                "code": 363,
+                "vn-name": "Trực Ninh"
+            },
+            {
+                "name": "Xuân Trường",
+                "code": 364,
+                "vn-name": "Xuân Trường"
+            },
+            {
+                "name": "Giao Thủy",
+                "code": 365,
+                "vn-name": "Giao Thủy"
+            },
+            {
+                "name": "Hải Hậu",
+                "code": 366,
+                "vn-name": "Hải Hậu"
+            }
+        ],
+        "vn-name": "Nam Định"
+    },
+    {
+        "name": "Lai Châu",
+        "code": 12,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Lai Châu",
+                "code": 105,
+                "vn-name": "Lai Châu"
+            },
+            {
+                "name": "Tam Đường",
+                "code": 106,
+                "vn-name": "Tam Đường"
+            },
+            {
+                "name": "Mường Tè",
+                "code": 107,
+                "vn-name": "Mường Tè"
+            },
+            {
+                "name": "Sìn Hồ",
+                "code": 108,
+                "vn-name": "Sìn Hồ"
+            },
+            {
+                "name": "Phong Thổ",
+                "code": 109,
+                "vn-name": "Phong Thổ"
+            },
+            {
+                "name": "Than Uyên",
+                "code": 110,
+                "vn-name": "Than Uyên"
+            },
+            {
+                "name": "Tân Uyên",
+                "code": 111,
+                "vn-name": "Tân Uyên"
+            },
+            {
+                "name": "Nậm Nhùn",
+                "code": 112,
+                "vn-name": "Nậm Nhùn"
+            }
+        ],
+        "vn-name": "Lai Châu"
+    },
+    {
+        "name": "Bến Tre",
+        "code": 83,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Bến Tre",
+                "code": 829,
+                "vn-name": "Bến Tre"
+            },
+            {
+                "name": "Châu Thành",
+                "code": 831,
+                "vn-name": "Châu Thành"
+            },
+            {
+                "name": "Chợ Lách",
+                "code": 832,
+                "vn-name": "Chợ Lách"
+            },
+            {
+                "name": "Mỏ Cày Nam",
+                "code": 833,
+                "vn-name": "Mỏ Cày Nam"
+            },
+            {
+                "name": "Giồng Trôm",
+                "code": 834,
+                "vn-name": "Giồng Trôm"
+            },
+            {
+                "name": "Bình Đại",
+                "code": 835,
+                "vn-name": "Bình Đại"
+            },
+            {
+                "name": "Ba Tri",
+                "code": 836,
+                "vn-name": "Ba Tri"
+            },
+            {
+                "name": "Thạnh Phú",
+                "code": 837,
+                "vn-name": "Thạnh Phú"
+            },
+            {
+                "name": "Mỏ Cày Bắc",
+                "code": 838,
+                "vn-name": "Mỏ Cày Bắc"
+            }
+        ],
+        "vn-name": "Bến Tre"
+    },
+    {
+        "name": "Khánh Hòa",
+        "code": 56,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Nha Trang",
+                "code": 568,
+                "vn-name": "Nha Trang"
+            },
+            {
+                "name": "Cam Ranh",
+                "code": 569,
+                "vn-name": "Cam Ranh"
+            },
+            {
+                "name": "Cam Lâm",
+                "code": 570,
+                "vn-name": "Cam Lâm"
+            },
+            {
+                "name": "Vạn Ninh",
+                "code": 571,
+                "vn-name": "Vạn Ninh"
+            },
+            {
+                "name": "Ninh Hòa",
+                "code": 572,
+                "vn-name": "Ninh Hòa"
+            },
+            {
+                "name": "Khánh Vĩnh",
+                "code": 573,
+                "vn-name": "Khánh Vĩnh"
+            },
+            {
+                "name": "Diên Khánh",
+                "code": 574,
+                "vn-name": "Diên Khánh"
+            },
+            {
+                "name": "Khánh Sơn",
+                "code": 575,
+                "vn-name": "Khánh Sơn"
+            },
+            {
+                "name": "Trường Sa",
+                "code": 576,
+                "vn-name": "Trường Sa"
+            }
+        ],
+        "vn-name": "Khánh Hòa"
+    },
+    {
+        "name": "Bình Thuận",
+        "code": 60,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Phan Thiết",
+                "code": 593,
+                "vn-name": "Phan Thiết"
+            },
+            {
+                "name": "La Gi",
+                "code": 594,
+                "vn-name": "La Gi"
+            },
+            {
+                "name": "Tuy Phong",
+                "code": 595,
+                "vn-name": "Tuy Phong"
+            },
+            {
+                "name": "Bắc Bình",
+                "code": 596,
+                "vn-name": "Bắc Bình"
+            },
+            {
+                "name": "Hàm Thuận Bắc",
+                "code": 597,
+                "vn-name": "Hàm Thuận Bắc"
+            },
+            {
+                "name": "Hàm Thuận Nam",
+                "code": 598,
+                "vn-name": "Hàm Thuận Nam"
+            },
+            {
+                "name": "Tánh Linh",
+                "code": 599,
+                "vn-name": "Tánh Linh"
+            },
+            {
+                "name": "Đức Linh",
+                "code": 600,
+                "vn-name": "Đức Linh"
+            },
+            {
+                "name": "Hàm Tân",
+                "code": 601,
+                "vn-name": "Hàm Tân"
+            },
+            {
+                "name": "Phú Quí",
+                "code": 602,
+                "vn-name": "Phú Quí"
+            }
+        ],
+        "vn-name": "Bình Thuận"
+    },
+    {
+        "name": "Cao Bằng",
+        "code": 4,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Cao Bằng",
+                "code": 40,
+                "vn-name": "Cao Bằng"
+            },
+            {
+                "name": "Bảo Lâm",
+                "code": 42,
+                "vn-name": "Bảo Lâm"
+            },
+            {
+                "name": "Bảo Lạc",
+                "code": 43,
+                "vn-name": "Bảo Lạc"
+            },
+            {
+                "name": "Thông Nông",
+                "code": 44,
+                "vn-name": "Thông Nông"
+            },
+            {
+                "name": "Hà Quảng",
+                "code": 45,
+                "vn-name": "Hà Quảng"
+            },
+            {
+                "name": "Trà Lĩnh",
+                "code": 46,
+                "vn-name": "Trà Lĩnh"
+            },
+            {
+                "name": "Trùng Khánh",
+                "code": 47,
+                "vn-name": "Trùng Khánh"
+            },
+            {
+                "name": "Hạ Lang",
+                "code": 48,
+                "vn-name": "Hạ Lang"
+            },
+            {
+                "name": "Quảng Uyên",
+                "code": 49,
+                "vn-name": "Quảng Uyên"
+            },
+            {
+                "name": "Phục Hoà",
+                "code": 50,
+                "vn-name": "Phục Hoà"
+            },
+            {
+                "name": "Hoà An",
+                "code": 51,
+                "vn-name": "Hoà An"
+            },
+            {
+                "name": "Nguyên Bình",
+                "code": 52,
+                "vn-name": "Nguyên Bình"
+            },
+            {
+                "name": "Thạch An",
+                "code": 53,
+                "vn-name": "Thạch An"
+            }
+        ],
+        "vn-name": "Cao Bằng"
+    },
+    {
+        "name": "Hải Phòng",
+        "code": 31,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Hồng Bàng",
+                "code": 303,
+                "vn-name": "Hồng Bàng"
+            },
+            {
+                "name": "Ngô Quyền",
+                "code": 304,
+                "vn-name": "Ngô Quyền"
+            },
+            {
+                "name": "Lê Chân",
+                "code": 305,
+                "vn-name": "Lê Chân"
+            },
+            {
+                "name": "Hải An",
+                "code": 306,
+                "vn-name": "Hải An"
+            },
+            {
+                "name": "Kiến An",
+                "code": 307,
+                "vn-name": "Kiến An"
+            },
+            {
+                "name": "Đồ Sơn",
+                "code": 308,
+                "vn-name": "Đồ Sơn"
+            },
+            {
+                "name": "Dương Kinh",
+                "code": 309,
+                "vn-name": "Dương Kinh"
+            },
+            {
+                "name": "Thuỷ Nguyên",
+                "code": 311,
+                "vn-name": "Thuỷ Nguyên"
+            },
+            {
+                "name": "An Dương",
+                "code": 312,
+                "vn-name": "An Dương"
+            },
+            {
+                "name": "An Lão",
+                "code": 313,
+                "vn-name": "An Lão"
+            },
+            {
+                "name": "Kiến Thuỵ",
+                "code": 314,
+                "vn-name": "Kiến Thuỵ"
+            },
+            {
+                "name": "Tiên Lãng",
+                "code": 315,
+                "vn-name": "Tiên Lãng"
+            },
+            {
+                "name": "Vĩnh Bảo",
+                "code": 316,
+                "vn-name": "Vĩnh Bảo"
+            },
+            {
+                "name": "Cát Hải",
+                "code": 317,
+                "vn-name": "Cát Hải"
+            }
+        ],
+        "vn-name": "Hải Phòng"
+    },
+    {
+        "name": "Ninh Bình",
+        "code": 37,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Ninh Bình",
+                "code": 369,
+                "vn-name": "Ninh Bình"
+            },
+            {
+                "name": "Tam Điệp",
+                "code": 370,
+                "vn-name": "Tam Điệp"
+            },
+            {
+                "name": "Nho Quan",
+                "code": 372,
+                "vn-name": "Nho Quan"
+            },
+            {
+                "name": "Gia Viễn",
+                "code": 373,
+                "vn-name": "Gia Viễn"
+            },
+            {
+                "name": "Hoa Lư",
+                "code": 374,
+                "vn-name": "Hoa Lư"
+            },
+            {
+                "name": "Yên Khánh",
+                "code": 375,
+                "vn-name": "Yên Khánh"
+            },
+            {
+                "name": "Kim Sơn",
+                "code": 376,
+                "vn-name": "Kim Sơn"
+            },
+            {
+                "name": "Yên Mô",
+                "code": 377,
+                "vn-name": "Yên Mô"
+            }
+        ],
+        "vn-name": "Ninh Bình"
+    },
+    {
+        "name": "Yên Bái",
+        "code": 15,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Yên Bái",
+                "code": 132,
+                "vn-name": "Yên Bái"
+            },
+            {
+                "name": "Nghĩa Lộ",
+                "code": 133,
+                "vn-name": "Nghĩa Lộ"
+            },
+            {
+                "name": "Lục Yên",
+                "code": 135,
+                "vn-name": "Lục Yên"
+            },
+            {
+                "name": "Văn Yên",
+                "code": 136,
+                "vn-name": "Văn Yên"
+            },
+            {
+                "name": "Mù Căng Chải",
+                "code": 137,
+                "vn-name": "Mù Căng Chải"
+            },
+            {
+                "name": "Trấn Yên",
+                "code": 138,
+                "vn-name": "Trấn Yên"
+            },
+            {
+                "name": "Trạm Tấu",
+                "code": 139,
+                "vn-name": "Trạm Tấu"
+            },
+            {
+                "name": "Văn Chấn",
+                "code": 140,
+                "vn-name": "Văn Chấn"
+            },
+            {
+                "name": "Yên Bình",
+                "code": 141,
+                "vn-name": "Yên Bình"
+            }
+        ],
+        "vn-name": "Yên Bái"
+    },
+    {
+        "name": "Gia Lai",
+        "code": 64,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Pleiku",
+                "code": 622,
+                "vn-name": "Pleiku"
+            },
+            {
+                "name": "An Khê",
+                "code": 623,
+                "vn-name": "An Khê"
+            },
+            {
+                "name": "Ayun Pa",
+                "code": 624,
+                "vn-name": "Ayun Pa"
+            },
+            {
+                "name": "KBang",
+                "code": 625,
+                "vn-name": "KBang"
+            },
+            {
+                "name": "Đăk Đoa",
+                "code": 626,
+                "vn-name": "Đăk Đoa"
+            },
+            {
+                "name": "Chư Păh",
+                "code": 627,
+                "vn-name": "Chư Păh"
+            },
+            {
+                "name": "Ia Grai",
+                "code": 628,
+                "vn-name": "Ia Grai"
+            },
+            {
+                "name": "Mang Yang",
+                "code": 629,
+                "vn-name": "Mang Yang"
+            },
+            {
+                "name": "Kông Chro",
+                "code": 630,
+                "vn-name": "Kông Chro"
+            },
+            {
+                "name": "Đức Cơ",
+                "code": 631,
+                "vn-name": "Đức Cơ"
+            },
+            {
+                "name": "Chư Prông",
+                "code": 632,
+                "vn-name": "Chư Prông"
+            },
+            {
+                "name": "Chư Sê",
+                "code": 633,
+                "vn-name": "Chư Sê"
+            },
+            {
+                "name": "Đăk Pơ",
+                "code": 634,
+                "vn-name": "Đăk Pơ"
+            },
+            {
+                "name": "Ia Pa",
+                "code": 635,
+                "vn-name": "Ia Pa"
+            },
+            {
+                "name": "Krông Pa",
+                "code": 637,
+                "vn-name": "Krông Pa"
+            },
+            {
+                "name": "Phú Thiện",
+                "code": 638,
+                "vn-name": "Phú Thiện"
+            },
+            {
+                "name": "Chư Pưh",
+                "code": 639,
+                "vn-name": "Chư Pưh"
+            }
+        ],
+        "vn-name": "Gia Lai"
+    },
+    {
+        "name": "Hoà Bình",
+        "code": 17,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Hòa Bình",
+                "code": 148,
+                "vn-name": "Hòa Bình"
+            },
+            {
+                "name": "Đà Bắc",
+                "code": 150,
+                "vn-name": "Đà Bắc"
+            },
+            {
+                "name": "Kỳ Sơn",
+                "code": 151,
+                "vn-name": "Kỳ Sơn"
+            },
+            {
+                "name": "Lương Sơn",
+                "code": 152,
+                "vn-name": "Lương Sơn"
+            },
+            {
+                "name": "Kim Bôi",
+                "code": 153,
+                "vn-name": "Kim Bôi"
+            },
+            {
+                "name": "Cao Phong",
+                "code": 154,
+                "vn-name": "Cao Phong"
+            },
+            {
+                "name": "Tân Lạc",
+                "code": 155,
+                "vn-name": "Tân Lạc"
+            },
+            {
+                "name": "Mai Châu",
+                "code": 156,
+                "vn-name": "Mai Châu"
+            },
+            {
+                "name": "Lạc Sơn",
+                "code": 157,
+                "vn-name": "Lạc Sơn"
+            },
+            {
+                "name": "Yên Thủy",
+                "code": 158,
+                "vn-name": "Yên Thủy"
+            },
+            {
+                "name": "Lạc Thủy",
+                "code": 159,
+                "vn-name": "Lạc Thủy"
+            }
+        ],
+        "vn-name": "Hoà Bình"
+    },
+    {
+        "name": "Bà Rịa - Vũng Tàu",
+        "code": 77,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Vũng Tàu",
+                "code": 747,
+                "vn-name": "Vũng Tàu"
+            },
+            {
+                "name": "Bà Rịa",
+                "code": 748,
+                "vn-name": "Bà Rịa"
+            },
+            {
+                "name": "Châu Đức",
+                "code": 750,
+                "vn-name": "Châu Đức"
+            },
+            {
+                "name": "Xuyên Mộc",
+                "code": 751,
+                "vn-name": "Xuyên Mộc"
+            },
+            {
+                "name": "Long Điền",
+                "code": 752,
+                "vn-name": "Long Điền"
+            },
+            {
+                "name": "Đất Đỏ",
+                "code": 753,
+                "vn-name": "Đất Đỏ"
+            },
+            {
+                "name": "Tân Thành",
+                "code": 754,
+                "vn-name": "Tân Thành"
+            }
+        ],
+        "vn-name": "Bà Rịa - Vũng Tàu"
+    },
+    {
+        "name": "Cà Mau",
+        "code": 96,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Cà Mau",
+                "code": 964,
+                "vn-name": "Cà Mau"
+            },
+            {
+                "name": "U Minh",
+                "code": 966,
+                "vn-name": "U Minh"
+            },
+            {
+                "name": "Thới Bình",
+                "code": 967,
+                "vn-name": "Thới Bình"
+            },
+            {
+                "name": "Trần Văn Thời",
+                "code": 968,
+                "vn-name": "Trần Văn Thời"
+            },
+            {
+                "name": "Cái Nước",
+                "code": 969,
+                "vn-name": "Cái Nước"
+            },
+            {
+                "name": "Đầm Dơi",
+                "code": 970,
+                "vn-name": "Đầm Dơi"
+            },
+            {
+                "name": "Năm Căn",
+                "code": 971,
+                "vn-name": "Năm Căn"
+            },
+            {
+                "name": "Phú Tân",
+                "code": 972,
+                "vn-name": "Phú Tân"
+            },
+            {
+                "name": "Ngọc Hiển",
+                "code": 973,
+                "vn-name": "Ngọc Hiển"
+            }
+        ],
+        "vn-name": "Cà Mau"
+    },
+    {
+        "name": "Bình Dương",
+        "code": 74,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Thủ Dầu Một",
+                "code": 718,
+                "vn-name": "Thủ Dầu Một"
+            },
+            {
+                "name": "Bàu Bàng",
+                "code": 719,
+                "vn-name": "Bàu Bàng"
+            },
+            {
+                "name": "Dầu Tiếng",
+                "code": 720,
+                "vn-name": "Dầu Tiếng"
+            },
+            {
+                "name": "Bến Cát",
+                "code": 721,
+                "vn-name": "Bến Cát"
+            },
+            {
+                "name": "Phú Giáo",
+                "code": 722,
+                "vn-name": "Phú Giáo"
+            },
+            {
+                "name": "Tân Uyên",
+                "code": 723,
+                "vn-name": "Tân Uyên"
+            },
+            {
+                "name": "Dĩ An",
+                "code": 724,
+                "vn-name": "Dĩ An"
+            },
+            {
+                "name": "Thuận An",
+                "code": 725,
+                "vn-name": "Thuận An"
+            },
+            {
+                "name": "Bắc Tân Uyên",
+                "code": 726,
+                "vn-name": "Bắc Tân Uyên"
+            }
+        ],
+        "vn-name": "Bình Dương"
+    },
+    {
+        "name": "Cần Thơ",
+        "code": 92,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Ninh Kiều",
+                "code": 916,
+                "vn-name": "Ninh Kiều"
+            },
+            {
+                "name": "Ô Môn",
+                "code": 917,
+                "vn-name": "Ô Môn"
+            },
+            {
+                "name": "Bình Thuỷ",
+                "code": 918,
+                "vn-name": "Bình Thuỷ"
+            },
+            {
+                "name": "Cái Răng",
+                "code": 919,
+                "vn-name": "Cái Răng"
+            },
+            {
+                "name": "Thốt Nốt",
+                "code": 923,
+                "vn-name": "Thốt Nốt"
+            },
+            {
+                "name": "Vĩnh Thạnh",
+                "code": 924,
+                "vn-name": "Vĩnh Thạnh"
+            },
+            {
+                "name": "Cờ Đỏ",
+                "code": 925,
+                "vn-name": "Cờ Đỏ"
+            },
+            {
+                "name": "Phong Điền",
+                "code": 926,
+                "vn-name": "Phong Điền"
+            },
+            {
+                "name": "Thới Lai",
+                "code": 927,
+                "vn-name": "Thới Lai"
+            }
+        ],
+        "vn-name": "Cần Thơ"
+    },
+    {
+        "name": "Thừa Thiên Huế",
+        "code": 46,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Huế",
+                "code": 474,
+                "vn-name": "Huế"
+            },
+            {
+                "name": "Phong Điền",
+                "code": 476,
+                "vn-name": "Phong Điền"
+            },
+            {
+                "name": "Quảng Điền",
+                "code": 477,
+                "vn-name": "Quảng Điền"
+            },
+            {
+                "name": "Phú Vang",
+                "code": 478,
+                "vn-name": "Phú Vang"
+            },
+            {
+                "name": "Hương Thủy",
+                "code": 479,
+                "vn-name": "Hương Thủy"
+            },
+            {
+                "name": "Hương Trà",
+                "code": 480,
+                "vn-name": "Hương Trà"
+            },
+            {
+                "name": "A Lưới",
+                "code": 481,
+                "vn-name": "A Lưới"
+            },
+            {
+                "name": "Phú Lộc",
+                "code": 482,
+                "vn-name": "Phú Lộc"
+            },
+            {
+                "name": "Nam Đông",
+                "code": 483,
+                "vn-name": "Nam Đông"
+            }
+        ],
+        "vn-name": "Thừa Thiên Huế"
+    },
+    {
+        "name": "Đồng Nai",
+        "code": 75,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Biên Hòa",
+                "code": 731,
+                "vn-name": "Biên Hòa"
+            },
+            {
+                "name": "Long Khánh",
+                "code": 732,
+                "vn-name": "Long Khánh"
+            },
+            {
+                "name": "Tân Phú",
+                "code": 734,
+                "vn-name": "Tân Phú"
+            },
+            {
+                "name": "Vĩnh Cửu",
+                "code": 735,
+                "vn-name": "Vĩnh Cửu"
+            },
+            {
+                "name": "Định Quán",
+                "code": 736,
+                "vn-name": "Định Quán"
+            },
+            {
+                "name": "Trảng Bom",
+                "code": 737,
+                "vn-name": "Trảng Bom"
+            },
+            {
+                "name": "Thống Nhất",
+                "code": 738,
+                "vn-name": "Thống Nhất"
+            },
+            {
+                "name": "Cẩm Mỹ",
+                "code": 739,
+                "vn-name": "Cẩm Mỹ"
+            },
+            {
+                "name": "Long Thành",
+                "code": 740,
+                "vn-name": "Long Thành"
+            },
+            {
+                "name": "Xuân Lộc",
+                "code": 741,
+                "vn-name": "Xuân Lộc"
+            },
+            {
+                "name": "Nhơn Trạch",
+                "code": 742,
+                "vn-name": "Nhơn Trạch"
+            }
+        ],
+        "vn-name": "Đồng Nai"
+    },
+    {
+        "name": "Tiền Giang",
+        "code": 82,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Mỹ Tho",
+                "code": 815,
+                "vn-name": "Mỹ Tho"
+            },
+            {
+                "name": "Gò Công",
+                "code": 816,
+                "vn-name": "Gò Công"
+            },
+            {
+                "name": "Cai Lậy",
+                "code": 817,
+                "vn-name": "Cai Lậy"
+            },
+            {
+                "name": "Tân Phước",
+                "code": 818,
+                "vn-name": "Tân Phước"
+            },
+            {
+                "name": "Cái Bè",
+                "code": 819,
+                "vn-name": "Cái Bè"
+            },
+            {
+                "name": "Cai Lậy",
+                "code": 820,
+                "vn-name": "Cai Lậy"
+            },
+            {
+                "name": "Châu Thành",
+                "code": 821,
+                "vn-name": "Châu Thành"
+            },
+            {
+                "name": "Chợ Gạo",
+                "code": 822,
+                "vn-name": "Chợ Gạo"
+            },
+            {
+                "name": "Gò Công Tây",
+                "code": 823,
+                "vn-name": "Gò Công Tây"
+            },
+            {
+                "name": "Gò Công Đông",
+                "code": 824,
+                "vn-name": "Gò Công Đông"
+            },
+            {
+                "name": "Tân Phú Đông",
+                "code": 825,
+                "vn-name": "Tân Phú Đông"
+            }
+        ],
+        "vn-name": "Tiền Giang"
+    },
+    {
+        "name": "Điện Biên",
+        "code": 11,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Điện Biên Phủ",
+                "code": 94,
+                "vn-name": "Điện Biên Phủ"
+            },
+            {
+                "name": "Mường Lay",
+                "code": 95,
+                "vn-name": "Mường Lay"
+            },
+            {
+                "name": "Mường Nhé",
+                "code": 96,
+                "vn-name": "Mường Nhé"
+            },
+            {
+                "name": "Mường Chà",
+                "code": 97,
+                "vn-name": "Mường Chà"
+            },
+            {
+                "name": "Tủa Chùa",
+                "code": 98,
+                "vn-name": "Tủa Chùa"
+            },
+            {
+                "name": "Tuần Giáo",
+                "code": 99,
+                "vn-name": "Tuần Giáo"
+            },
+            {
+                "name": "Điện Biên",
+                "code": 100,
+                "vn-name": "Điện Biên"
+            },
+            {
+                "name": "Điện Biên Đông",
+                "code": 101,
+                "vn-name": "Điện Biên Đông"
+            },
+            {
+                "name": "Mường Ảng",
+                "code": 102,
+                "vn-name": "Mường Ảng"
+            },
+            {
+                "name": "Nậm Pồ",
+                "code": 103,
+                "vn-name": "Nậm Pồ"
+            }
+        ],
+        "vn-name": "Điện Biên"
+    },
+    {
+        "name": "Vĩnh Phúc",
+        "code": 26,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Vĩnh Yên",
+                "code": 243,
+                "vn-name": "Vĩnh Yên"
+            },
+            {
+                "name": "Phúc Yên",
+                "code": 244,
+                "vn-name": "Phúc Yên"
+            },
+            {
+                "name": "Lập Thạch",
+                "code": 246,
+                "vn-name": "Lập Thạch"
+            },
+            {
+                "name": "Tam Dương",
+                "code": 247,
+                "vn-name": "Tam Dương"
+            },
+            {
+                "name": "Tam Đảo",
+                "code": 248,
+                "vn-name": "Tam Đảo"
+            },
+            {
+                "name": "Bình Xuyên",
+                "code": 249,
+                "vn-name": "Bình Xuyên"
+            },
+            {
+                "name": "Yên Lạc",
+                "code": 251,
+                "vn-name": "Yên Lạc"
+            },
+            {
+                "name": "Vĩnh Tường",
+                "code": 252,
+                "vn-name": "Vĩnh Tường"
+            },
+            {
+                "name": "Sông Lô",
+                "code": 253,
+                "vn-name": "Sông Lô"
+            }
+        ],
+        "vn-name": "Vĩnh Phúc"
+    },
+    {
+        "name": "Quảng Nam",
+        "code": 49,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Tam Kỳ",
+                "code": 502,
+                "vn-name": "Tam Kỳ"
+            },
+            {
+                "name": "Hội An",
+                "code": 503,
+                "vn-name": "Hội An"
+            },
+            {
+                "name": "Tây Giang",
+                "code": 504,
+                "vn-name": "Tây Giang"
+            },
+            {
+                "name": "Đông Giang",
+                "code": 505,
+                "vn-name": "Đông Giang"
+            },
+            {
+                "name": "Đại Lộc",
+                "code": 506,
+                "vn-name": "Đại Lộc"
+            },
+            {
+                "name": "Điện Bàn",
+                "code": 507,
+                "vn-name": "Điện Bàn"
+            },
+            {
+                "name": "Duy Xuyên",
+                "code": 508,
+                "vn-name": "Duy Xuyên"
+            },
+            {
+                "name": "Quế Sơn",
+                "code": 509,
+                "vn-name": "Quế Sơn"
+            },
+            {
+                "name": "Nam Giang",
+                "code": 510,
+                "vn-name": "Nam Giang"
+            },
+            {
+                "name": "Phước Sơn",
+                "code": 511,
+                "vn-name": "Phước Sơn"
+            },
+            {
+                "name": "Hiệp Đức",
+                "code": 512,
+                "vn-name": "Hiệp Đức"
+            },
+            {
+                "name": "Thăng Bình",
+                "code": 513,
+                "vn-name": "Thăng Bình"
+            },
+            {
+                "name": "Tiên Phước",
+                "code": 514,
+                "vn-name": "Tiên Phước"
+            },
+            {
+                "name": "Bắc Trà My",
+                "code": 515,
+                "vn-name": "Bắc Trà My"
+            },
+            {
+                "name": "Nam Trà My",
+                "code": 516,
+                "vn-name": "Nam Trà My"
+            },
+            {
+                "name": "Núi Thành",
+                "code": 517,
+                "vn-name": "Núi Thành"
+            },
+            {
+                "name": "Phú Ninh",
+                "code": 518,
+                "vn-name": "Phú Ninh"
+            },
+            {
+                "name": "Nông Sơn",
+                "code": 519,
+                "vn-name": "Nông Sơn"
+            }
+        ],
+        "vn-name": "Quảng Nam"
+    },
+    {
+        "name": "Đắk Lắk",
+        "code": 66,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Buôn Ma Thuột",
+                "code": 643,
+                "vn-name": "Buôn Ma Thuột"
+            },
+            {
+                "name": "Buôn Hồ",
+                "code": 644,
+                "vn-name": "Buôn Hồ"
+            },
+            {
+                "name": "Ea H'leo",
+                "code": 645,
+                "vn-name": "Ea H'leo"
+            },
+            {
+                "name": "Ea Súp",
+                "code": 646,
+                "vn-name": "Ea Súp"
+            },
+            {
+                "name": "Buôn Đôn",
+                "code": 647,
+                "vn-name": "Buôn Đôn"
+            },
+            {
+                "name": "Cư M'gar",
+                "code": 648,
+                "vn-name": "Cư M'gar"
+            },
+            {
+                "name": "Krông Búk",
+                "code": 649,
+                "vn-name": "Krông Búk"
+            },
+            {
+                "name": "Krông Năng",
+                "code": 650,
+                "vn-name": "Krông Năng"
+            },
+            {
+                "name": "Ea Kar",
+                "code": 651,
+                "vn-name": "Ea Kar"
+            },
+            {
+                "name": "M'Đrắk",
+                "code": 652,
+                "vn-name": "M'Đrắk"
+            },
+            {
+                "name": "Krông Bông",
+                "code": 653,
+                "vn-name": "Krông Bông"
+            },
+            {
+                "name": "Krông Pắc",
+                "code": 654,
+                "vn-name": "Krông Pắc"
+            },
+            {
+                "name": "Krông A Na",
+                "code": 655,
+                "vn-name": "Krông A Na"
+            },
+            {
+                "name": "Lắk",
+                "code": 656,
+                "vn-name": "Lắk"
+            },
+            {
+                "name": "Cư Kuin",
+                "code": 657,
+                "vn-name": "Cư Kuin"
+            }
+        ],
+        "vn-name": "Đắk Lắk"
+    },
+    {
+        "name": "Thái Nguyên",
+        "code": 19,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Thái Nguyên",
+                "code": 164,
+                "vn-name": "Thái Nguyên"
+            },
+            {
+                "name": "Sông Công",
+                "code": 165,
+                "vn-name": "Sông Công"
+            },
+            {
+                "name": "Định Hóa",
+                "code": 167,
+                "vn-name": "Định Hóa"
+            },
+            {
+                "name": "Phú Lương",
+                "code": 168,
+                "vn-name": "Phú Lương"
+            },
+            {
+                "name": "Đồng Hỷ",
+                "code": 169,
+                "vn-name": "Đồng Hỷ"
+            },
+            {
+                "name": "Võ Nhai",
+                "code": 170,
+                "vn-name": "Võ Nhai"
+            },
+            {
+                "name": "Đại Từ",
+                "code": 171,
+                "vn-name": "Đại Từ"
+            },
+            {
+                "name": "Phổ Yên",
+                "code": 172,
+                "vn-name": "Phổ Yên"
+            },
+            {
+                "name": "Phú Bình",
+                "code": 173,
+                "vn-name": "Phú Bình"
+            }
+        ],
+        "vn-name": "Thái Nguyên"
+    },
+    {
+        "name": "Hải Dương",
+        "code": 30,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Hải Dương",
+                "code": 288,
+                "vn-name": "Hải Dương"
+            },
+            {
+                "name": "Chí Linh",
+                "code": 290,
+                "vn-name": "Chí Linh"
+            },
+            {
+                "name": "Nam Sách",
+                "code": 291,
+                "vn-name": "Nam Sách"
+            },
+            {
+                "name": "Kinh Môn",
+                "code": 292,
+                "vn-name": "Kinh Môn"
+            },
+            {
+                "name": "Kim Thành",
+                "code": 293,
+                "vn-name": "Kim Thành"
+            },
+            {
+                "name": "Thanh Hà",
+                "code": 294,
+                "vn-name": "Thanh Hà"
+            },
+            {
+                "name": "Cẩm Giàng",
+                "code": 295,
+                "vn-name": "Cẩm Giàng"
+            },
+            {
+                "name": "Bình Giang",
+                "code": 296,
+                "vn-name": "Bình Giang"
+            },
+            {
+                "name": "Gia Lộc",
+                "code": 297,
+                "vn-name": "Gia Lộc"
+            },
+            {
+                "name": "Tứ Kỳ",
+                "code": 298,
+                "vn-name": "Tứ Kỳ"
+            },
+            {
+                "name": "Ninh Giang",
+                "code": 299,
+                "vn-name": "Ninh Giang"
+            },
+            {
+                "name": "Thanh Miện",
+                "code": 300,
+                "vn-name": "Thanh Miện"
+            }
+        ],
+        "vn-name": "Hải Dương"
+    },
+    {
+        "name": "Bạc Liêu",
+        "code": 95,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Bạc Liêu",
+                "code": 954,
+                "vn-name": "Bạc Liêu"
+            },
+            {
+                "name": "Hồng Dân",
+                "code": 956,
+                "vn-name": "Hồng Dân"
+            },
+            {
+                "name": "Phước Long",
+                "code": 957,
+                "vn-name": "Phước Long"
+            },
+            {
+                "name": "Vĩnh Lợi",
+                "code": 958,
+                "vn-name": "Vĩnh Lợi"
+            },
+            {
+                "name": "Giá Rai",
+                "code": 959,
+                "vn-name": "Giá Rai"
+            },
+            {
+                "name": "Đông Hải",
+                "code": 960,
+                "vn-name": "Đông Hải"
+            },
+            {
+                "name": "Hoà Bình",
+                "code": 961,
+                "vn-name": "Hoà Bình"
+            }
+        ],
+        "vn-name": "Bạc Liêu"
+    },
+    {
+        "name": "Trà Vinh",
+        "code": 84,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Trà Vinh",
+                "code": 842,
+                "vn-name": "Trà Vinh"
+            },
+            {
+                "name": "Càng Long",
+                "code": 844,
+                "vn-name": "Càng Long"
+            },
+            {
+                "name": "Cầu Kè",
+                "code": 845,
+                "vn-name": "Cầu Kè"
+            },
+            {
+                "name": "Tiểu Cần",
+                "code": 846,
+                "vn-name": "Tiểu Cần"
+            },
+            {
+                "name": "Châu Thành",
+                "code": 847,
+                "vn-name": "Châu Thành"
+            },
+            {
+                "name": "Cầu Ngang",
+                "code": 848,
+                "vn-name": "Cầu Ngang"
+            },
+            {
+                "name": "Trà Cú",
+                "code": 849,
+                "vn-name": "Trà Cú"
+            },
+            {
+                "name": "Duyên Hải",
+                "code": 850,
+                "vn-name": "Duyên Hải"
+            },
+            {
+                "name": "Duyên Hải",
+                "code": 851,
+                "vn-name": "Duyên Hải"
+            }
+        ],
+        "vn-name": "Trà Vinh"
+    },
+    {
+        "name": "Thái Bình",
+        "code": 34,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Thái Bình",
+                "code": 336,
+                "vn-name": "Thái Bình"
+            },
+            {
+                "name": "Quỳnh Phụ",
+                "code": 338,
+                "vn-name": "Quỳnh Phụ"
+            },
+            {
+                "name": "Hưng Hà",
+                "code": 339,
+                "vn-name": "Hưng Hà"
+            },
+            {
+                "name": "Đông Hưng",
+                "code": 340,
+                "vn-name": "Đông Hưng"
+            },
+            {
+                "name": "Thái Thụy",
+                "code": 341,
+                "vn-name": "Thái Thụy"
+            },
+            {
+                "name": "Tiền Hải",
+                "code": 342,
+                "vn-name": "Tiền Hải"
+            },
+            {
+                "name": "Kiến Xương",
+                "code": 343,
+                "vn-name": "Kiến Xương"
+            },
+            {
+                "name": "Vũ Thư",
+                "code": 344,
+                "vn-name": "Vũ Thư"
+            }
+        ],
+        "vn-name": "Thái Bình"
+    },
+    {
+        "name": "Hà Tĩnh",
+        "code": 42,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Hà Tĩnh",
+                "code": 436,
+                "vn-name": "Hà Tĩnh"
+            },
+            {
+                "name": "Hồng Lĩnh",
+                "code": 437,
+                "vn-name": "Hồng Lĩnh"
+            },
+            {
+                "name": "Hương Sơn",
+                "code": 439,
+                "vn-name": "Hương Sơn"
+            },
+            {
+                "name": "Đức Thọ",
+                "code": 440,
+                "vn-name": "Đức Thọ"
+            },
+            {
+                "name": "Vũ Quang",
+                "code": 441,
+                "vn-name": "Vũ Quang"
+            },
+            {
+                "name": "Nghi Xuân",
+                "code": 442,
+                "vn-name": "Nghi Xuân"
+            },
+            {
+                "name": "Can Lộc",
+                "code": 443,
+                "vn-name": "Can Lộc"
+            },
+            {
+                "name": "Hương Khê",
+                "code": 444,
+                "vn-name": "Hương Khê"
+            },
+            {
+                "name": "Thạch Hà",
+                "code": 445,
+                "vn-name": "Thạch Hà"
+            },
+            {
+                "name": "Cẩm Xuyên",
+                "code": 446,
+                "vn-name": "Cẩm Xuyên"
+            },
+            {
+                "name": "Kỳ Anh",
+                "code": 447,
+                "vn-name": "Kỳ Anh"
+            },
+            {
+                "name": "Lộc Hà",
+                "code": 448,
+                "vn-name": "Lộc Hà"
+            },
+            {
+                "name": "Kỳ Anh",
+                "code": 449,
+                "vn-name": "Kỳ Anh"
+            }
+        ],
+        "vn-name": "Hà Tĩnh"
+    },
+    {
+        "name": "Ninh Thuận",
+        "code": 58,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Phan Rang-Tháp Chàm",
+                "code": 582,
+                "vn-name": "Phan Rang-Tháp Chàm"
+            },
+            {
+                "name": "Bác Ái",
+                "code": 584,
+                "vn-name": "Bác Ái"
+            },
+            {
+                "name": "Ninh Sơn",
+                "code": 585,
+                "vn-name": "Ninh Sơn"
+            },
+            {
+                "name": "Ninh Hải",
+                "code": 586,
+                "vn-name": "Ninh Hải"
+            },
+            {
+                "name": "Ninh Phước",
+                "code": 587,
+                "vn-name": "Ninh Phước"
+            },
+            {
+                "name": "Thuận Bắc",
+                "code": 588,
+                "vn-name": "Thuận Bắc"
+            },
+            {
+                "name": "Thuận Nam",
+                "code": 589,
+                "vn-name": "Thuận Nam"
+            }
+        ],
+        "vn-name": "Ninh Thuận"
+    },
+    {
+        "name": "Đồng Tháp",
+        "code": 87,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Cao Lãnh",
+                "code": 866,
+                "vn-name": "Cao Lãnh"
+            },
+            {
+                "name": "Sa Đéc",
+                "code": 867,
+                "vn-name": "Sa Đéc"
+            },
+            {
+                "name": "Hồng Ngự",
+                "code": 868,
+                "vn-name": "Hồng Ngự"
+            },
+            {
+                "name": "Tân Hồng",
+                "code": 869,
+                "vn-name": "Tân Hồng"
+            },
+            {
+                "name": "Hồng Ngự",
+                "code": 870,
+                "vn-name": "Hồng Ngự"
+            },
+            {
+                "name": "Tam Nông",
+                "code": 871,
+                "vn-name": "Tam Nông"
+            },
+            {
+                "name": "Tháp Mười",
+                "code": 872,
+                "vn-name": "Tháp Mười"
+            },
+            {
+                "name": "Cao Lãnh",
+                "code": 873,
+                "vn-name": "Cao Lãnh"
+            },
+            {
+                "name": "Thanh Bình",
+                "code": 874,
+                "vn-name": "Thanh Bình"
+            },
+            {
+                "name": "Lấp Vò",
+                "code": 875,
+                "vn-name": "Lấp Vò"
+            },
+            {
+                "name": "Lai Vung",
+                "code": 876,
+                "vn-name": "Lai Vung"
+            },
+            {
+                "name": "Châu Thành",
+                "code": 877,
+                "vn-name": "Châu Thành"
+            }
+        ],
+        "vn-name": "Đồng Tháp"
+    },
+    {
+        "name": "Long An",
+        "code": 80,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Tân An",
+                "code": 794,
+                "vn-name": "Tân An"
+            },
+            {
+                "name": "Kiến Tường",
+                "code": 795,
+                "vn-name": "Kiến Tường"
+            },
+            {
+                "name": "Tân Hưng",
+                "code": 796,
+                "vn-name": "Tân Hưng"
+            },
+            {
+                "name": "Vĩnh Hưng",
+                "code": 797,
+                "vn-name": "Vĩnh Hưng"
+            },
+            {
+                "name": "Mộc Hóa",
+                "code": 798,
+                "vn-name": "Mộc Hóa"
+            },
+            {
+                "name": "Tân Thạnh",
+                "code": 799,
+                "vn-name": "Tân Thạnh"
+            },
+            {
+                "name": "Thạnh Hóa",
+                "code": 800,
+                "vn-name": "Thạnh Hóa"
+            },
+            {
+                "name": "Đức Huệ",
+                "code": 801,
+                "vn-name": "Đức Huệ"
+            },
+            {
+                "name": "Đức Hòa",
+                "code": 802,
+                "vn-name": "Đức Hòa"
+            },
+            {
+                "name": "Bến Lức",
+                "code": 803,
+                "vn-name": "Bến Lức"
+            },
+            {
+                "name": "Thủ Thừa",
+                "code": 804,
+                "vn-name": "Thủ Thừa"
+            },
+            {
+                "name": "Tân Trụ",
+                "code": 805,
+                "vn-name": "Tân Trụ"
+            },
+            {
+                "name": "Cần Đước",
+                "code": 806,
+                "vn-name": "Cần Đước"
+            },
+            {
+                "name": "Cần Giuộc",
+                "code": 807,
+                "vn-name": "Cần Giuộc"
+            },
+            {
+                "name": "Châu Thành",
+                "code": 808,
+                "vn-name": "Châu Thành"
+            }
+        ],
+        "vn-name": "Long An"
+    },
+    {
+        "name": "Hậu Giang",
+        "code": 93,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Vị Thanh",
+                "code": 930,
+                "vn-name": "Vị Thanh"
+            },
+            {
+                "name": "Ngã Bảy",
+                "code": 931,
+                "vn-name": "Ngã Bảy"
+            },
+            {
+                "name": "Châu Thành A",
+                "code": 932,
+                "vn-name": "Châu Thành A"
+            },
+            {
+                "name": "Châu Thành",
+                "code": 933,
+                "vn-name": "Châu Thành"
+            },
+            {
+                "name": "Phụng Hiệp",
+                "code": 934,
+                "vn-name": "Phụng Hiệp"
+            },
+            {
+                "name": "Vị Thuỷ",
+                "code": 935,
+                "vn-name": "Vị Thuỷ"
+            },
+            {
+                "name": "Long Mỹ",
+                "code": 936,
+                "vn-name": "Long Mỹ"
+            },
+            {
+                "name": "Long Mỹ",
+                "code": 937,
+                "vn-name": "Long Mỹ"
+            }
+        ],
+        "vn-name": "Hậu Giang"
+    },
+    {
+        "name": "Quảng Ninh",
+        "code": 22,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Hạ Long",
+                "code": 193,
+                "vn-name": "Hạ Long"
+            },
+            {
+                "name": "Móng Cái",
+                "code": 194,
+                "vn-name": "Móng Cái"
+            },
+            {
+                "name": "Cẩm Phả",
+                "code": 195,
+                "vn-name": "Cẩm Phả"
+            },
+            {
+                "name": "Uông Bí",
+                "code": 196,
+                "vn-name": "Uông Bí"
+            },
+            {
+                "name": "Bình Liêu",
+                "code": 198,
+                "vn-name": "Bình Liêu"
+            },
+            {
+                "name": "Tiên Yên",
+                "code": 199,
+                "vn-name": "Tiên Yên"
+            },
+            {
+                "name": "Đầm Hà",
+                "code": 200,
+                "vn-name": "Đầm Hà"
+            },
+            {
+                "name": "Hải Hà",
+                "code": 201,
+                "vn-name": "Hải Hà"
+            },
+            {
+                "name": "Ba Chẽ",
+                "code": 202,
+                "vn-name": "Ba Chẽ"
+            },
+            {
+                "name": "Vân Đồn",
+                "code": 203,
+                "vn-name": "Vân Đồn"
+            },
+            {
+                "name": "Hoành Bồ",
+                "code": 204,
+                "vn-name": "Hoành Bồ"
+            },
+            {
+                "name": "Đông Triều",
+                "code": 205,
+                "vn-name": "Đông Triều"
+            },
+            {
+                "name": "Quảng Yên",
+                "code": 206,
+                "vn-name": "Quảng Yên"
+            },
+            {
+                "name": "Cô Tô",
+                "code": 207,
+                "vn-name": "Cô Tô"
+            }
+        ],
+        "vn-name": "Quảng Ninh"
+    },
+    {
+        "name": "Phú Thọ",
+        "code": 25,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Việt Trì",
+                "code": 227,
+                "vn-name": "Việt Trì"
+            },
+            {
+                "name": "Phú Thọ",
+                "code": 228,
+                "vn-name": "Phú Thọ"
+            },
+            {
+                "name": "Đoan Hùng",
+                "code": 230,
+                "vn-name": "Đoan Hùng"
+            },
+            {
+                "name": "Hạ Hoà",
+                "code": 231,
+                "vn-name": "Hạ Hoà"
+            },
+            {
+                "name": "Thanh Ba",
+                "code": 232,
+                "vn-name": "Thanh Ba"
+            },
+            {
+                "name": "Phù Ninh",
+                "code": 233,
+                "vn-name": "Phù Ninh"
+            },
+            {
+                "name": "Yên Lập",
+                "code": 234,
+                "vn-name": "Yên Lập"
+            },
+            {
+                "name": "Cẩm Khê",
+                "code": 235,
+                "vn-name": "Cẩm Khê"
+            },
+            {
+                "name": "Tam Nông",
+                "code": 236,
+                "vn-name": "Tam Nông"
+            },
+            {
+                "name": "Lâm Thao",
+                "code": 237,
+                "vn-name": "Lâm Thao"
+            },
+            {
+                "name": "Thanh Sơn",
+                "code": 238,
+                "vn-name": "Thanh Sơn"
+            },
+            {
+                "name": "Thanh Thuỷ",
+                "code": 239,
+                "vn-name": "Thanh Thuỷ"
+            },
+            {
+                "name": "Tân Sơn",
+                "code": 240,
+                "vn-name": "Tân Sơn"
+            }
+        ],
+        "vn-name": "Phú Thọ"
+    },
+    {
+        "name": "Quảng Bình",
+        "code": 44,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Đồng Hới",
+                "code": 450,
+                "vn-name": "Đồng Hới"
+            },
+            {
+                "name": "Minh Hóa",
+                "code": 452,
+                "vn-name": "Minh Hóa"
+            },
+            {
+                "name": "Tuyên Hóa",
+                "code": 453,
+                "vn-name": "Tuyên Hóa"
+            },
+            {
+                "name": "Quảng Trạch",
+                "code": 454,
+                "vn-name": "Quảng Trạch"
+            },
+            {
+                "name": "Bố Trạch",
+                "code": 455,
+                "vn-name": "Bố Trạch"
+            },
+            {
+                "name": "Quảng Ninh",
+                "code": 456,
+                "vn-name": "Quảng Ninh"
+            },
+            {
+                "name": "Lệ Thủy",
+                "code": 457,
+                "vn-name": "Lệ Thủy"
+            },
+            {
+                "name": "Ba Đồn",
+                "code": 458,
+                "vn-name": "Ba Đồn"
+            }
+        ],
+        "vn-name": "Quảng Bình"
+    },
+    {
+        "name": "Hà Nam",
+        "code": 35,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Phủ Lý",
+                "code": 347,
+                "vn-name": "Phủ Lý"
+            },
+            {
+                "name": "Duy Tiên",
+                "code": 349,
+                "vn-name": "Duy Tiên"
+            },
+            {
+                "name": "Kim Bảng",
+                "code": 350,
+                "vn-name": "Kim Bảng"
+            },
+            {
+                "name": "Thanh Liêm",
+                "code": 351,
+                "vn-name": "Thanh Liêm"
+            },
+            {
+                "name": "Bình Lục",
+                "code": 352,
+                "vn-name": "Bình Lục"
+            },
+            {
+                "name": "Lý Nhân",
+                "code": 353,
+                "vn-name": "Lý Nhân"
+            }
+        ],
+        "vn-name": "Hà Nam"
+    },
+    {
+        "name": "Bắc Ninh",
+        "code": 27,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Bắc Ninh",
+                "code": 256,
+                "vn-name": "Bắc Ninh"
+            },
+            {
+                "name": "Yên Phong",
+                "code": 258,
+                "vn-name": "Yên Phong"
+            },
+            {
+                "name": "Quế Võ",
+                "code": 259,
+                "vn-name": "Quế Võ"
+            },
+            {
+                "name": "Tiên Du",
+                "code": 260,
+                "vn-name": "Tiên Du"
+            },
+            {
+                "name": "Từ Sơn",
+                "code": 261,
+                "vn-name": "Từ Sơn"
+            },
+            {
+                "name": "Thuận Thành",
+                "code": 262,
+                "vn-name": "Thuận Thành"
+            },
+            {
+                "name": "Gia Bình",
+                "code": 263,
+                "vn-name": "Gia Bình"
+            },
+            {
+                "name": "Lương Tài",
+                "code": 264,
+                "vn-name": "Lương Tài"
+            }
+        ],
+        "vn-name": "Bắc Ninh"
+    },
+    {
+        "name": "Bắc Giang",
+        "code": 24,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Bắc Giang",
+                "code": 213,
+                "vn-name": "Bắc Giang"
+            },
+            {
+                "name": "Yên Thế",
+                "code": 215,
+                "vn-name": "Yên Thế"
+            },
+            {
+                "name": "Tân Yên",
+                "code": 216,
+                "vn-name": "Tân Yên"
+            },
+            {
+                "name": "Lạng Giang",
+                "code": 217,
+                "vn-name": "Lạng Giang"
+            },
+            {
+                "name": "Lục Nam",
+                "code": 218,
+                "vn-name": "Lục Nam"
+            },
+            {
+                "name": "Lục Ngạn",
+                "code": 219,
+                "vn-name": "Lục Ngạn"
+            },
+            {
+                "name": "Sơn Động",
+                "code": 220,
+                "vn-name": "Sơn Động"
+            },
+            {
+                "name": "Yên Dũng",
+                "code": 221,
+                "vn-name": "Yên Dũng"
+            },
+            {
+                "name": "Việt Yên",
+                "code": 222,
+                "vn-name": "Việt Yên"
+            },
+            {
+                "name": "Hiệp Hòa",
+                "code": 223,
+                "vn-name": "Hiệp Hòa"
+            }
+        ],
+        "vn-name": "Bắc Giang"
+    },
+    {
+        "name": "Bắc Kạn",
+        "code": 6,
+        "quan-huyen": [
+            {
+                "name": "Tất cả",
+                "code": 0,
+                "vn-name": "Tất cả"
+            },
+            {
+                "name": "Bắc Kạn",
+                "code": 58,
+                "vn-name": "Bắc Kạn"
+            },
+            {
+                "name": "Pác Nặm",
+                "code": 60,
+                "vn-name": "Pác Nặm"
+            },
+            {
+                "name": "Ba Bể",
+                "code": 61,
+                "vn-name": "Ba Bể"
+            },
+            {
+                "name": "Ngân Sơn",
+                "code": 62,
+                "vn-name": "Ngân Sơn"
+            },
+            {
+                "name": "Bạch Thông",
+                "code": 63,
+                "vn-name": "Bạch Thông"
+            },
+            {
+                "name": "Chợ Đồn",
+                "code": 64,
+                "vn-name": "Chợ Đồn"
+            },
+            {
+                "name": "Chợ Mới",
+                "code": 65,
+                "vn-name": "Chợ Mới"
+            },
+            {
+                "name": "Na Rì",
+                "code": 66,
+                "vn-name": "Na Rì"
+            }
+        ],
+        "vn-name": "Bắc Kạn"
+    }
+]

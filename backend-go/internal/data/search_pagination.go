@@ -174,6 +174,85 @@ func (rm *RecordManager) filterWithPaginationScan(
 	return result
 }
 
+// FilterFirstPageFast returns the first page quickly without scanning the full table for exact totalCount.
+// It is intended for SSR/listing paths where first-contentful response time matters more than exact totals.
+func (rm *RecordManager) FilterFirstPageFast(
+	appID, tableName string,
+	filter model.SearchFilter,
+	take int,
+) map[string]any {
+	if take <= 0 {
+		take = DefaultFilterTake
+	}
+	if take > maxFilterTake {
+		take = maxFilterTake
+	}
+
+	app, table, err := rm.sanitizeTable(appID, tableName)
+	if err != nil {
+		return map[string]any{"rows": []any{}, "data": []any{}, "totalCount": 0}
+	}
+
+	page := make([]map[string]any, 0, take)
+	rowKeys := make([]string, 0, take)
+	var payloadBytes int64
+	hasMore := false
+	truncated := false
+
+	_ = rm.scanAllRecordSources(app, table, func(storageKey string, raw []byte) error {
+		var record map[string]any
+		if json.Unmarshal(raw, &record) != nil || !filter.Matches(record) {
+			return nil
+		}
+		if len(page) >= take {
+			hasMore = true
+			return errScanStop
+		}
+		rows, stop := appendRowWithinBudget(nil, record, &payloadBytes)
+		if stop {
+			truncated = true
+			return errScanStop
+		}
+		if len(rows) == 0 {
+			return nil
+		}
+		page = append(page, record)
+		rk := recordKey(record)
+		if rk == "" {
+			rk = storageKey
+		}
+		rowKeys = append(rowKeys, rk)
+		return nil
+	})
+
+	slice := make([]any, 0, len(page))
+	for _, r := range page {
+		slice = append(slice, r)
+	}
+
+	totalCount := len(page)
+	if hasMore {
+		// Signal that more rows likely exist without paying full scan cost.
+		totalCount = len(page) + 1
+	}
+
+	result := map[string]any{
+		"rows":       slice,
+		"data":       slice,
+		"totalCount": totalCount,
+	}
+	if hasMore {
+		result["estimatedTotalCount"] = true
+	}
+	if truncated {
+		result["truncated"] = true
+	}
+	if hasMore && len(rowKeys) > 0 {
+		result["nextCursor"] = rowKeys[len(rowKeys)-1]
+	}
+	return result
+}
+
 func (rm *RecordManager) filterWithSortPagination(
 	appID, tableName string,
 	filter model.SearchFilter,

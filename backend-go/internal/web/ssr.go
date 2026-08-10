@@ -322,7 +322,46 @@ func ResolveRPIndexPub(rm *data.RecordManager, host string) string {
 			return rp
 		}
 	}
+	if rp := findRouterRPIndexByDomain(rm, domain); rp != "" {
+		return rp
+	}
 	return ""
+}
+
+func findRouterRPIndexByDomain(rm *data.RecordManager, domain string) string {
+	rows := rowsFrom(rm.Filter("csm", "sys_la_routers", model.SearchFilter{Operator: "AND", Conditions: []model.SearchFilter{
+		model.EqFilter("run", 1),
+	}}))
+	rows = filterRouterRowsByDomainAliases(rows, []model.SearchFilter{model.EqFilter("domain_name", domain)})
+	bestScore := -1
+	bestRP := ""
+	for _, row := range rows {
+		rp := strings.Trim(strings.Trim(recordStr(row, "rp_index"), "/"), " ")
+		if rp == "" {
+			continue
+		}
+		score := 0
+		if strings.EqualFold(strings.TrimSpace(recordStr(row, "app_type")), "web") {
+			score += 100
+		}
+		if strings.TrimSpace(recordStr(row, "app_id")) != "" {
+			score += 20
+		}
+		if strings.TrimSpace(recordStr(row, "tbl_services")) != "" {
+			score += 10
+		}
+		if strings.TrimSpace(recordStr(row, "tbl_service_detail")) != "" {
+			score += 10
+		}
+		if strings.TrimSpace(recordStr(row, "f_title")) != "" {
+			score += 5
+		}
+		if score > bestScore {
+			bestScore = score
+			bestRP = rp
+		}
+	}
+	return bestRP
 }
 
 func BuildSitemap(rm *data.RecordManager, host string) string {
@@ -463,7 +502,6 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 	normalizedPath := NormalizeIncomingWebPath(uri)
 	route := finalizeSSRRoute(resolveRoute(ctx.RM, host, normalizedPath), ctx.RM, host)
 	isWebAppType := strings.EqualFold(strings.TrimSpace(route.AppType), "web")
-	isAdminRoute := strings.EqualFold(strings.TrimSpace(route.RPIndex), "admin")
 	markStage("route")
 	domain := route.Domain
 	if domain == "" {
@@ -499,19 +537,11 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 
 	pageTitle := route.FTitle
 	if pageTitle == "" {
-		if isAdminRoute {
-			pageTitle = "CSM"
-		} else {
-			pageTitle = "Trang web của tôi"
-		}
+		pageTitle = "Trang web của tôi"
 	}
 	pageDescription := route.FKeyword
 	if pageDescription == "" {
-		if isAdminRoute {
-			pageDescription = "Hệ thống quản trị CSM"
-		} else {
-			pageDescription = "Mô tả mặc định"
-		}
+		pageDescription = "Mô tả mặc định"
 	}
 	pageKeywords := route.FKeyword
 	ogImage := absoluteAssetURL(route.FLogo, protocol, hostStr)
@@ -688,19 +718,13 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 	pageType := resolveSSRPageType(initialData)
 
 	filePath := ctx.RM.GetStaticFile(indexPath)
-	if filePath == "" && isAdminRoute {
-		for _, candidate := range []string{"admin/index.html", "index.html"} {
-			if p := ctx.RM.GetStaticFile(candidate); p != "" {
-				filePath = p
-				if rpIndex == "" {
-					rpIndex = "admin"
-				}
-				break
-			}
-		}
-	}
 	if filePath == "" && rpIndex != "" {
 		if p := ctx.RM.GetStaticFile(rpIndex + "/index.html"); p != "" {
+			filePath = p
+		}
+	}
+	if filePath == "" {
+		if p := ctx.RM.GetStaticFile("index.html"); p != "" {
 			filePath = p
 		}
 	}
@@ -1819,6 +1843,20 @@ func resolveServiceListing(
 				relatedTake = 6
 			}
 			insertRelated(rm, route, domain, serviceCode, curID, lang, relatedTake, out)
+			return out
+		}
+		if row = findActiveServiceDetail(rm, route, domain, "", detailSlug); len(row) > 0 {
+			serviceType := recordStr(row, "service_type")
+			curID := recordStr(row, "id")
+			out["serviceDetail"] = mapDetailFullObj(rm, row, lang)
+			out["serviceCode"] = serviceType
+			if serviceType != "" {
+				relatedTake := pageSize
+				if relatedTake > 6 {
+					relatedTake = 6
+				}
+				insertRelated(rm, route, domain, serviceType, curID, lang, relatedTake, out)
+			}
 			return out
 		}
 	}

@@ -133,12 +133,14 @@ func mimeFromPath(path string) string {
 }
 
 func writeText(w http.ResponseWriter, status int, contentType, body string) {
+	applyResponseSecurityHeaders(w)
 	w.Header().Set("Content-Type", contentType)
 	w.WriteHeader(status)
 	_, _ = w.Write([]byte(body))
 }
 
 func writeTextCached(w http.ResponseWriter, status int, contentType, body, cacheControl string) {
+	applyResponseSecurityHeaders(w)
 	w.Header().Set("Content-Type", contentType)
 	if cacheControl != "" {
 		w.Header().Set("Cache-Control", cacheControl)
@@ -149,9 +151,18 @@ func writeTextCached(w http.ResponseWriter, status int, contentType, body, cache
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	raw, _ := json.Marshal(v)
+	applyResponseSecurityHeaders(w)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_, _ = w.Write(raw)
+}
+
+func applyResponseSecurityHeaders(w http.ResponseWriter) {
+	// Conservative baseline headers that improve security posture without breaking existing SSR pages.
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("X-Frame-Options", "SAMEORIGIN")
+	w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+	w.Header().Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
 }
 
 func writeJSONError(w http.ResponseWriter, msg string) {
