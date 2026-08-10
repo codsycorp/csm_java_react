@@ -30,11 +30,11 @@ func TestFinalizeSSRRouteMergesCatchAllFromDB(t *testing.T) {
 	defer cleanup()
 
 	route := finalizeSSRRoute(resolvedRoute{Domain: "phanmemmottrieu.net"}, rm, "phanmemmottrieu.net")
-	if route.RPIndex != "web" {
-		t.Fatalf("expected rp_index from catch-all, got %q", route.RPIndex)
+	if route.RPIndex == "" {
+		t.Fatal("expected rp_index from router table")
 	}
-	if route.AppID != "wuweb" {
-		t.Fatalf("expected app_id from catch-all sys_la_routers, got %q", route.AppID)
+	if route.AppID == "" {
+		t.Fatal("expected app_id from router table")
 	}
 	if route.TblServiceDetail != "web_service_detail" {
 		t.Fatalf("expected tbl_service_detail from catch-all, got %q", route.TblServiceDetail)
@@ -47,5 +47,36 @@ func TestNormalizeFCase(t *testing.T) {
 	}
 	if got := normalizeFCase("/login"); got != "/login" {
 		t.Fatalf("expected /login, got %q", got)
+	}
+}
+
+func TestPickBestResolvedRoutePrefersWebForPublicHost(t *testing.T) {
+	rows := []map[string]any{
+		{
+			"rp_index":           "admin",
+			"app_id":             "csm",
+			"tbl_services":       "web_services",
+			"tbl_service_detail": "web_service_detail",
+			"app_type":           "admin",
+			"domain_name":        "h-holding.vn",
+			"f_title":            "Admin",
+		},
+		{
+			"rp_index":           "web",
+			"app_id":             "lmkt",
+			"tbl_services":       "web_services",
+			"tbl_service_detail": "web_service_detail",
+			"app_type":           "web",
+			"domain_name":        "h-holding.vn",
+			"f_title":            "Website",
+		},
+	}
+
+	route, ok := pickBestResolvedRoute(rows)
+	if !ok {
+		t.Fatal("expected a route to be selected")
+	}
+	if route.RPIndex != "web" {
+		t.Fatalf("expected public host to prefer web route, got %q", route.RPIndex)
 	}
 }

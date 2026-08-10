@@ -846,7 +846,7 @@ if (typeof window !== 'undefined') {
     ];
 
     const kqxsLanding = {
-      slug: 'thong-ke-giai-dac-biet-du-lieu-kqxs',
+      slug: 'thong-ke-ket-qua-xo-so',
       service_code: 'thong-ke-ket-qua-xo-so',
       service_type: 'thong-ke-ket-qua-xo-so',
       title: 'Hệ Thống Thống Kê Giải Đặc Biệt Và Phân Tích Dữ Liệu Kết Quả Xổ Số 3 Miền',
@@ -867,7 +867,7 @@ if (typeof window !== 'undefined') {
       attributes_keywords: 'thống kê giải đặc biệt, thống kê giải đặc biệt theo tuần, thống kê giải đặc biệt theo tổng, thống kê lô, tần suất lô tô, lô gan miền bắc, lô gan mb, lô gan miền nam, thống kê kết quả xổ số miền bắc 100 ngày, xsmb theo tuần, thống kê xổ số miền bắc, thống kê miền bắc',
       attributes_keywords_en: 'special prize statistics, weekly xsmb stats, loto frequency analytics, 100-day lottery data',
       attributes_keywords_zh: '特别奖统计, 周期统计, 号码频率, 北部100天数据',
-      tags: JSON.stringify(['thong-ke-xo-so', 'giai-dac-biet', 'xsmb-100-ngay', 'du-lieu-3-mien']),
+      tags: JSON.stringify(['thong-ke-giai-dac-biet-du-lieu-kqxs', 'thong-ke-xo-so', 'giai-dac-biet', 'xsmb-100-ngay', 'du-lieu-3-mien']),
       featured: 1,
       active_home: 0,
       publish_date: new Date().toISOString(),

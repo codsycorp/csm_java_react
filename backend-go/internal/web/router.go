@@ -1,14 +1,120 @@
 package web
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 
+	"csm_server/backend-go/internal/model"
 	"csm_server/backend-go/internal/state"
 )
 
+func parseAliasTags(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+
+	var values []string
+	if err := json.Unmarshal([]byte(raw), &values); err == nil {
+		aliases := make([]string, 0, len(values))
+		for _, value := range values {
+			if trimmed := strings.TrimSpace(value); trimmed != "" {
+				aliases = append(aliases, trimmed)
+			}
+		}
+		return aliases
+	}
+
+	aliases := make([]string, 0)
+	for _, part := range strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == '|' || r == ';' || r == ' ' || r == '[' || r == ']' || r == '"' || r == '\''
+	}) {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			aliases = append(aliases, trimmed)
+		}
+	}
+	return aliases
+}
+
+func redirectCanonicalCategoryPath(st *state.AppState, w http.ResponseWriter, r *http.Request, uri, host, query string) bool {
+	trimmed := strings.Trim(strings.TrimSpace(uri), "/")
+	if trimmed == "" {
+		return false
+	}
+
+	parts := strings.Split(trimmed, "/")
+	if len(parts) == 0 {
+		return false
+	}
+	alias := strings.TrimSpace(parts[0])
+	if alias == "" {
+		return false
+	}
+
+	route := finalizeSSRRoute(resolveRoute(st.RecordManager, host, uri), st.RecordManager, host)
+	if route.AppID == "" || route.TblServices == "" {
+		return false
+	}
+
+	filter := model.SearchFilter{
+		Operator: "AND",
+		Conditions: []model.SearchFilter{
+			model.EqFilter("status", "active"),
+			{Field: "domain", FilterType: "like", Value: route.Domain},
+		},
+	}
+
+	rows := rowsFrom(st.RecordManager.Filter(route.AppID, route.TblServices, filter))
+	for _, row := range rows {
+		slug := strings.TrimSpace(recordStr(row, "slug"))
+		serviceCode := strings.TrimSpace(recordStr(row, "service_code"))
+		aliases := append([]string{}, parseAliasTags(recordStr(row, "tags"))...)
+		if slug != "" {
+			aliases = append(aliases, slug)
+		}
+		if serviceCode != "" {
+			aliases = append(aliases, serviceCode)
+		}
+
+		matchedAlias := false
+		for _, candidate := range aliases {
+			if candidate == alias {
+				matchedAlias = true
+				break
+			}
+		}
+		if !matchedAlias {
+			continue
+		}
+
+		canonical := serviceCode
+		if canonical == "" {
+			canonical = slug
+		}
+		if canonical == "" || canonical == alias {
+			return false
+		}
+
+		target := "/" + canonical
+		if len(parts) > 1 {
+			target += "/" + strings.Join(parts[1:], "/")
+		}
+		if query != "" {
+			target += "?" + query
+		}
+		http.Redirect(w, r, target, http.StatusMovedPermanently)
+		return true
+	}
+
+	return false
+}
+
 func HandleWebPath(st *state.AppState, w http.ResponseWriter, r *http.Request, uri, host, query string) {
 	uri = NormalizeIncomingWebPath(uri)
+	if redirectCanonicalCategoryPath(st, w, r, uri, host, query) {
+		return
+	}
 
 	switch uri {
 	case "/robots.txt":
@@ -99,6 +205,10 @@ func ServeStatic(st *state.AppState, w http.ResponseWriter, r *http.Request, uri
 }
 
 func ServeSSR(st *state.AppState, w http.ResponseWriter, r *http.Request, uri, host, query string) {
+	uri = NormalizeIncomingWebPath(uri)
+	if redirectCanonicalCategoryPath(st, w, r, uri, host, query) {
+		return
+	}
 	ctx := SSRContext{RM: st.RecordManager}
 	html := RenderPage(ctx, uri, host, query)
 	writeTextCached(w, http.StatusOK, "text/html; charset=utf-8", html, "public, max-age=60, stale-while-revalidate=300")

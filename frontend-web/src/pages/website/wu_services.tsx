@@ -1213,17 +1213,17 @@ const WuServicesPage: React.FC = () => {
   // 2) Landing article from serviceDetailList (post content)
   // 3) Built-in default template for critical pages (KQXS)
   const resolveCategoryLandingContent = (categoryKey: string): string => {
-    const fromMeta = String(getHeaderMeta(categoryKey)?.content || '').trim();
+    const fromMeta = String(
+      getHeaderMeta(categoryKey)?.content
+      || (categoryKey === (slug || '') ? (initialReactData?.pageContent || '') : '')
+      || ''
+    ).trim();
     if (fromMeta) return fromMeta;
 
     const langCode = resolveLangCode(i18n.language || 'vi');
     const categoryPosts = getPostsByServiceType(categoryKey);
-    const preferredSlug = categoryKey === 'thong-ke-ket-qua-xo-so'
-      ? 'thong-ke-giai-dac-biet-du-lieu-kqxs'
-      : '';
 
-    const landingPost = categoryPosts.find((post) => String(post?.slug || '').trim() === preferredSlug)
-      || categoryPosts.find((post) => Boolean((post as any).featured))
+    const landingPost = categoryPosts.find((post) => Boolean((post as any).featured))
       || categoryPosts.find((post) => String(post?.content || '').trim().length > 0);
 
     const fromPost = landingPost
@@ -1739,7 +1739,11 @@ const WuServicesPage: React.FC = () => {
   // Build SEO friendly href for service detail
   const getServiceDetailUrl = (post: ServicePost) => {
     const langCode = (currentLang && currentLang !== 'vi') ? currentLang.split('-')[0].slice(0,2) : '';
-    let url = `/${post.serviceType}/${post.slug}`;
+    const serviceCategory = ssrServiceCategory as any;
+    const serviceCode = String(serviceCategory?.service_code || '').trim();
+    const serviceSlug = String(serviceCategory?.slug || '').trim();
+    const isLandingAlias = Boolean(serviceCode && serviceSlug && serviceCode !== serviceSlug && String(post?.slug || '').trim() === serviceSlug);
+    let url = isLandingAlias ? `/${serviceCode}` : `/${post.serviceType}/${post.slug}`;
     if (langCode && langCode !== 'vi') url += `?hl=${langCode}`;
     return url;
   };

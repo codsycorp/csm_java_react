@@ -197,7 +197,6 @@ func ResolveRPIndexPub(rm *data.RecordManager, host string) string {
 	if domain == "" {
 		return ""
 	}
-	isAdminHost := strings.HasPrefix(strings.ToLower(strings.TrimSpace(domain)), "admin.")
 	filter := model.SearchFilter{
 		Operator: "AND",
 		Conditions: []model.SearchFilter{
@@ -209,29 +208,12 @@ func ResolveRPIndexPub(rm *data.RecordManager, host string) string {
 		},
 	}
 	result := rm.Filter("csm", "sys_la_routers", filter)
-	fallback := ""
 	for _, row := range rowsFrom(result) {
 		if rp := strings.Trim(strings.Trim(recordStr(row, "rp_index"), "/"), " "); rp != "" {
-			rpLower := strings.ToLower(rp)
-			if isAdminHost {
-				if rpLower == "admin" {
-					return rp
-				}
-				if fallback == "" {
-					fallback = rp
-				}
-				continue
-			}
-			if rpLower == "admin" {
-				if fallback == "" {
-					fallback = rp
-				}
-				continue
-			}
 			return rp
 		}
 	}
-	return fallback
+	return ""
 }
 
 func BuildSitemap(rm *data.RecordManager, host string) string {
@@ -732,25 +714,19 @@ func queryReactCatchAllRoute(rm *data.RecordManager, domain string) (resolvedRou
 		return resolvedRoute{}, false
 	}
 
-	isAdminDomain := strings.HasPrefix(strings.ToLower(strings.TrimSpace(domain)), "admin.")
 	bestScore := -1
 	best := resolvedRoute{}
 
 	for _, row := range rows {
 		candidate := resolvedRouteFromRow(row)
-		rp := strings.ToLower(strings.TrimSpace(candidate.RPIndex))
 		score := 0
 
-		if isAdminDomain {
-			if rp == "admin" {
-				score += 100
-			}
-		} else {
-			if rp != "admin" {
-				score += 100
-			}
+		if strings.TrimSpace(candidate.RPIndex) != "" {
+			score += 10
 		}
-
+		if strings.EqualFold(strings.TrimSpace(candidate.AppType), "web") {
+			score += 100
+		}
 		if strings.TrimSpace(candidate.AppID) != "" {
 			score += 20
 		}
@@ -808,24 +784,6 @@ func finalizeSSRRoute(route resolvedRoute, rm *data.RecordManager, host string) 
 		domain = DomainFromHost(host)
 	}
 	route.Domain = domain
-	isAdminHost := strings.HasPrefix(strings.ToLower(strings.TrimSpace(DomainFromHost(host))), "admin.")
-
-	if isAdminHost {
-		if strings.TrimSpace(route.RPIndex) == "" {
-			route.RPIndex = "admin"
-		}
-		// Admin SSR must not inherit public website listing tables.
-		if strings.TrimSpace(route.AppID) == "" {
-			route.AppID = "csm"
-		}
-		route.TblServices = ""
-		route.TblServiceDetail = ""
-		route.AppID = normalizeTableAppID(route.AppID)
-		if strings.TrimSpace(route.FTitle) == "" {
-			route.FTitle = "CSM"
-		}
-		return route
-	}
 
 	if strings.TrimSpace(route.RPIndex) == "" {
 		if pub := ResolveRPIndexPub(rm, host); pub != "" {
@@ -918,7 +876,52 @@ func queryRoute(rm *data.RecordManager, conditions []model.SearchFilter) (resolv
 	if len(rows) == 0 {
 		return resolvedRoute{}, false
 	}
-	return resolvedRouteFromRow(rows[0]), true
+	best, ok := pickBestResolvedRoute(rows)
+	if !ok {
+		return resolvedRoute{}, false
+	}
+	return best, true
+}
+
+func pickBestResolvedRoute(rows []map[string]any) (resolvedRoute, bool) {
+	if len(rows) == 0 {
+		return resolvedRoute{}, false
+	}
+	bestScore := -1
+	best := resolvedRoute{}
+
+	for _, row := range rows {
+		candidate := resolvedRouteFromRow(row)
+		rp := strings.ToLower(strings.TrimSpace(candidate.RPIndex))
+		score := 0
+
+		if rp != "" {
+			score += 10
+		}
+
+		if strings.EqualFold(strings.TrimSpace(candidate.AppType), "web") {
+			score += 100
+		}
+		if strings.TrimSpace(candidate.AppID) != "" {
+			score += 20
+		}
+		if strings.TrimSpace(candidate.TblServices) != "" {
+			score += 10
+		}
+		if strings.TrimSpace(candidate.TblServiceDetail) != "" {
+			score += 10
+		}
+		if strings.TrimSpace(candidate.FTitle) != "" {
+			score += 5
+		}
+
+		if score > bestScore {
+			bestScore = score
+			best = candidate
+		}
+	}
+
+	return best, true
 }
 
 func resolvedRouteFromRow(row map[string]any) resolvedRoute {
@@ -1013,6 +1016,7 @@ func loadCategoriesFull(rm *data.RecordManager, route resolvedRoute, domain, lan
 			"category":               category,
 			"category_en":            recordStr(obj, "category_en"),
 			"category_zh":            recordStr(obj, "category_zh"),
+			"tags":                   recordStr(obj, "tags"),
 			"is_service":             isService,
 			"is_group_slug":          isGroupSlug,
 			"is_group_slug_default":  isGroupSlugDefault,

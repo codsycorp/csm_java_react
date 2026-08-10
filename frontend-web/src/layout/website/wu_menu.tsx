@@ -347,7 +347,6 @@ export function useWebsiteMenu() {
 
   const hasDynamicLotteryMenu =
     serviceMenuKeys.has('/thong-ke-ket-qua-xo-so') ||
-    serviceMenuKeys.has('/thong-ke-xo-so') ||
     serviceMenuKeys.has('/xo-so');
 
   console.log('📊 [Menu Stats]:', {

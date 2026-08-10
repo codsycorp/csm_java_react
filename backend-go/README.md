@@ -273,6 +273,9 @@ Copy nguyen khoi lenh ben duoi va chay (khong can sua file script):
 cd /Volumes/Datas/CSM/JavaProjects/csm_server
 chmod +x backend-go/docker-build.sh deploy-go-linux.sh
 
+./backend-go/docker-build.sh --linux --linux-arch amd64 --llamacpp
+./deploy-go-linux.sh root@csmbridge.net /root/la_server /Volumes/Datas/CSM/JavaProjects/csm_server/dist/csm-go-linux-amd64
+
 # 1) Build Linux amd64 native llamacpp (Docker)
 ./backend-go/docker-build.sh --linux --linux-arch amd64 --llamacpp
 ./deploy-go-linux.sh root@csmbridge.net /root/la_server /Volumes/Datas/CSM/JavaProjects/csm_server/dist/csm-go-linux-amd64
@@ -329,4 +332,8 @@ chmod +x ./scripts/build-go-linux-native.sh ./deploy-go-linux.sh
 ./scripts/build-go-linux-native.sh --remote root@csmbridge.net dist/csm_go_server
 
 UPLOAD_AI_MODEL=false ./deploy-go-linux.sh root@csmbridge.net /root/la_server /Volumes/Datas/CSM/JavaProjects/csm_server/dist/csm_go_server
+
+# Model GGUF không cần upload lại nếu server đã có sẵn file tại:
+# /root/la_server/csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q8_0.gguf
+# Script chỉ upload binary + config, còn AI local sẽ dùng model hiện có trên server.
 # ****** XONG HƯỚNG DẪN BUILD BACKEND GO ĐƯA THẲNG LÊN SERVER ******** #
