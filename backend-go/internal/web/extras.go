@@ -124,13 +124,6 @@ func resolveVersionRPIndex(rm *data.RecordManager, host string) string {
 	if rpIndex != "" {
 		return rpIndex
 	}
-	if strings.HasPrefix(DomainFromHost(host), "admin.") {
-		for _, candidate := range []string{"admin/version.json", "version.json"} {
-			if rm.GetStaticFile(candidate) != "" {
-				return "admin"
-			}
-		}
-	}
 	return ""
 }
 

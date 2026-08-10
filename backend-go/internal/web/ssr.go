@@ -17,13 +17,39 @@ import (
 )
 
 const ssrCacheTTL = 30 * time.Minute
+const ssrShortCacheTTL = 90 * time.Second
+const ssrMissCacheTTL = 30 * time.Second
+const ssrShellCacheTTL = 10 * time.Minute
+const ssrCategoryCacheTTL = 10 * time.Minute
+const ssrSlowLogDefault = 1200 * time.Millisecond
+const ssrDetailPrefixFallbackMaxSlugLen = 64
 
 type ssrCacheEntry struct {
 	data    string
 	expires time.Time
 }
 
+type ssrInflightEntry struct {
+	done chan string
+}
+
+type ssrShellCacheEntry struct {
+	html    string
+	expires time.Time
+}
+
+type ssrCategoryCacheEntry struct {
+	categories         []any
+	dynamicTemplates   map[string]any
+	mainServiceCode    string
+	defaultServiceCode string
+	expires            time.Time
+}
+
 var ssrCache sync.Map
+var ssrInflight sync.Map
+var ssrShellCache sync.Map
+var ssrCategoryCache sync.Map
 
 type sitemapCacheEntry struct {
 	body    string
@@ -116,13 +142,15 @@ type preprocessCtx struct {
 }
 
 func RenderPage(ctx SSRContext, uri, host, queryStr string) string {
+	host = resolveSSRHostForDev(host, queryStr)
 	hostKey := host
 	if hostKey == "" {
 		hostKey = "default"
 	}
 	cacheKey := hostKey + ":" + uri
-	if queryStr != "" {
-		cacheKey += "?" + queryStr
+	normalizedQS := normalizeSSRCacheQuery(queryStr)
+	if normalizedQS != "" {
+		cacheKey += "?" + normalizedQS
 	}
 
 	if entry, ok := ssrCache.Load(cacheKey); ok {
@@ -131,37 +159,119 @@ func RenderPage(ctx SSRContext, uri, host, queryStr string) string {
 		}
 	}
 
+	inflight := &ssrInflightEntry{done: make(chan string, 1)}
+	actual, loaded := ssrInflight.LoadOrStore(cacheKey, inflight)
+	if loaded {
+		if ce, ok := actual.(*ssrInflightEntry); ok {
+			return <-ce.done
+		}
+	}
+
 	html := buildSSRHTML(ctx, uri, host, queryStr)
-	if queryStr == "" && shouldCacheSSRPage(uri, html) {
+	cacheableQuery := normalizedQS == "" || isSafeSSRCacheQuery(queryStr)
+	if cacheableQuery && shouldCacheSSRPage(uri, html) {
+		ttl := resolveSSRCacheTTL(uri, html)
 		ssrCache.Store(cacheKey, &ssrCacheEntry{
 			data:    html,
-			expires: time.Now().Add(ssrCacheTTL),
+			expires: time.Now().Add(ttl),
 		})
 	}
+	inflight.done <- html
+	close(inflight.done)
+	ssrInflight.Delete(cacheKey)
 	return html
 }
 
-// shouldCacheSSRPage skips caching detail URLs that failed to resolve serviceDetail,
-// so a transient lookup miss is not frozen for 30 minutes (Java has no full-page SSR cache).
-func shouldCacheSSRPage(uri, html string) bool {
-	// Avoid freezing transient empty category listings for 30 minutes.
-	if strings.Contains(html, `"serviceDetailList":[]`) || strings.Contains(html, `"serviceDetailList": []`) {
-		return false
+func readSSRShellFile(filePath string) (string, error) {
+	if entry, ok := ssrShellCache.Load(filePath); ok {
+		if ce, ok := entry.(*ssrShellCacheEntry); ok && time.Now().Before(ce.expires) {
+			return ce.html, nil
+		}
 	}
+	raw, err := os.ReadFile(filePath)
+	if err != nil {
+		return "", err
+	}
+	html := string(raw)
+	ssrShellCache.Store(filePath, &ssrShellCacheEntry{html: html, expires: time.Now().Add(ssrShellCacheTTL)})
+	return html, nil
+}
 
+func normalizeMetaText(raw string, maxLen int) string {
+	return strings.TrimSpace(stripHTMLToText(raw, maxLen))
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
+func cloneAnySlice(in []any) []any {
+	if len(in) == 0 {
+		return []any{}
+	}
+	raw, err := json.Marshal(in)
+	if err != nil {
+		out := make([]any, len(in))
+		copy(out, in)
+		return out
+	}
+	out := []any{}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		out := make([]any, len(in))
+		copy(out, in)
+		return out
+	}
+	return out
+}
+
+func cloneAnyMap(in map[string]any) map[string]any {
+	if len(in) == 0 {
+		return map[string]any{}
+	}
+	raw, err := json.Marshal(in)
+	if err != nil {
+		out := make(map[string]any, len(in))
+		for k, v := range in {
+			out[k] = v
+		}
+		return out
+	}
+	out := map[string]any{}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		out := make(map[string]any, len(in))
+		for k, v := range in {
+			out[k] = v
+		}
+		return out
+	}
+	return out
+}
+
+// shouldCacheSSRPage keeps SSR pages cacheable; unstable/miss variants use short TTL.
+func shouldCacheSSRPage(uri, html string) bool {
 	if !looksLikeDetailURI(uri) {
 		return true
 	}
-	// Two-segment URLs are always detail pages; one-segment may be category — only skip cache when
-	// we attempted detail resolution and got nothing (category pages never include serviceDetail).
-	if strings.Contains(html, `"serviceDetail"`) {
-		return true
-	}
-	segs := pathSegmentCount(NormalizeURI(uri))
-	if segs >= 2 {
-		return false
-	}
 	return true
+}
+
+// resolveSSRCacheTTL uses shorter TTL for potentially transient empty/miss SSR states.
+func resolveSSRCacheTTL(uri, html string) time.Duration {
+	segs := pathSegmentCount(NormalizeURI(uri))
+	if segs >= 2 && !strings.Contains(html, `"serviceDetail"`) {
+		return ssrMissCacheTTL
+	}
+	if segs == 1 {
+		if strings.Contains(html, `"serviceDetailList":[]`) || strings.Contains(html, `"serviceDetailList": []`) {
+			return ssrShortCacheTTL
+		}
+	}
+	return ssrCacheTTL
 }
 
 func pathSegmentCount(path string) int {
@@ -197,19 +307,18 @@ func ResolveRPIndexPub(rm *data.RecordManager, host string) string {
 	if domain == "" {
 		return ""
 	}
-	filter := model.SearchFilter{
-		Operator: "AND",
-		Conditions: []model.SearchFilter{
-			model.EqFilter("domain_name", domain),
-			model.EqFilter("f_case", ""),
-			{Field: "rp_index", FilterType: "isnotnull"},
-			{Field: "rp_index", FilterType: "noteq", Value: ""},
-			model.EqFilter("run", 1),
-		},
+	if route, ok := queryRoute(rm, []model.SearchFilter{
+		model.EqFilter("domain_name", domain),
+		{Field: "rp_index", FilterType: "isnotnull"},
+		{Field: "rp_index", FilterType: "noteq", Value: ""},
+		model.EqFilter("run", 1),
+	}); ok {
+		if rp := strings.Trim(strings.Trim(route.RPIndex, "/"), " "); rp != "" {
+			return rp
+		}
 	}
-	result := rm.Filter("csm", "sys_la_routers", filter)
-	if best, ok := pickBestResolvedRoute(rowsFrom(result)); ok {
-		if rp := strings.Trim(strings.Trim(best.RPIndex, "/"), " "); rp != "" {
+	if route, ok := queryReactCatchAllRoute(rm, domain); ok {
+		if rp := strings.Trim(strings.Trim(route.RPIndex, "/"), " "); rp != "" {
 			return rp
 		}
 	}
@@ -327,11 +436,35 @@ func sitemapURLEntry(url, lastmod, changefreq, priority string) string {
 }
 
 func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
+	start := time.Now()
+	profEnabled := isSSRStageProfileEnabled()
+	slowThreshold := resolveSSRSlowLogThreshold()
+	stageStart := start
+	stageDurations := make(map[string]time.Duration, 8)
+	markStage := func(name string) {
+		stageDurations[name] = time.Since(stageStart)
+		stageStart = time.Now()
+	}
+	defer func() {
+		total := time.Since(start)
+		if !profEnabled && total < slowThreshold {
+			return
+		}
+		log.Printf(
+			"SSR profile path=%s total_ms=%d slow_threshold_ms=%d stages=%s",
+			uri,
+			total.Milliseconds(),
+			slowThreshold.Milliseconds(),
+			formatSSRStageDurations(stageDurations),
+		)
+	}()
+
 	host = resolveSSRHostForDev(host, queryStr)
-	isAdminHost := strings.HasPrefix(strings.ToLower(strings.TrimSpace(DomainFromHost(host))), "admin.")
 	normalizedPath := NormalizeIncomingWebPath(uri)
 	route := finalizeSSRRoute(resolveRoute(ctx.RM, host, normalizedPath), ctx.RM, host)
 	isWebAppType := strings.EqualFold(strings.TrimSpace(route.AppType), "web")
+	isAdminRoute := strings.EqualFold(strings.TrimSpace(route.RPIndex), "admin")
+	markStage("route")
 	domain := route.Domain
 	if domain == "" {
 		domain = DomainFromHost(host)
@@ -362,10 +495,11 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 		categories, dynamicTemplates, mainServiceCode, defaultServiceCode =
 			loadCategoriesFull(ctx.RM, route, domain, lang)
 	}
+	markStage("categories")
 
 	pageTitle := route.FTitle
 	if pageTitle == "" {
-		if isAdminHost {
+		if isAdminRoute {
 			pageTitle = "CSM"
 		} else {
 			pageTitle = "Trang web của tôi"
@@ -373,7 +507,7 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 	}
 	pageDescription := route.FKeyword
 	if pageDescription == "" {
-		if isAdminHost {
+		if isAdminRoute {
 			pageDescription = "Hệ thống quản trị CSM"
 		} else {
 			pageDescription = "Mô tả mặc định"
@@ -406,6 +540,7 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 			}
 		}
 	}
+	markStage("seo")
 	// Fallback to sys_la_routers meta when no service/detail matched (Java behavior)
 	if seo == nil {
 		if route.FTitle != "" {
@@ -445,6 +580,25 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 		"app_id":        route.AppID,
 	}
 
+	// Normalize SEO text fields to guarantee non-empty, crawler-safe meta output.
+	pageTitle = firstNonEmpty(normalizeMetaText(pageTitle, 120), "Trang web của tôi")
+	pageDescription = firstNonEmpty(
+		normalizeMetaText(pageDescription, 220),
+		normalizeMetaText(pageKeywords, 220),
+		normalizeMetaText(pageTitle, 220),
+		"Nội dung đang được cập nhật.",
+	)
+	pageKeywords = firstNonEmpty(normalizeMetaText(pageKeywords, 255), pageDescription)
+
+	if seo != nil {
+		seo.Title = pageTitle
+		seo.Description = pageDescription
+		seo.Keywords = pageKeywords
+		if seo.Image == "" {
+			seo.Image = ogImage
+		}
+	}
+
 	ssrRoutes := map[string]any{}
 	if isWebAppType {
 		ssrRoutes[normalizedPath] = map[string]any{
@@ -481,11 +635,41 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 	if isWebAppType && route.AppID != "" && route.TblServiceDetail != "" {
 		listing := resolveServiceListing(ctx.RM, route, domain, normalizedPath, params, mainServiceCode, defaultServiceCode)
 		enrichInitialData(initialData, listing, protocol, hostStr)
+		if shouldApplyServiceCategorySeoOverrides(initialData) {
+			cat := initialData["serviceCategory"].(map[string]any)
+			pageTitle, pageDescription, pageKeywords, canonical, ogImage = applyServiceCategorySeoOverrides(cat, lang, pageTitle, pageDescription, pageKeywords, canonical, ogImage)
+			initialData["pageTitle"] = pageTitle
+			initialData["pageDescription"] = pageDescription
+			initialData["pageKeywords"] = pageKeywords
+			initialData["canonicalUrl"] = canonical
+			initialData["ogImage"] = ogImage
+			meta["title"] = pageTitle
+			meta["title2"] = pageTitle
+			meta["f_title"] = pageTitle
+			meta["description"] = pageDescription
+			meta["f_description"] = pageDescription
+			meta["keywords"] = pageKeywords
+			meta["f_keyword"] = pageKeywords
+			meta["image"] = ogImage
+			meta["og_image"] = ogImage
+			if seo == nil {
+				seo = &seoMeta{Lang: lang, Title: pageTitle, Description: pageDescription, Keywords: pageKeywords, Image: ogImage}
+			} else {
+				seo.Title = pageTitle
+				seo.Description = pageDescription
+				seo.Keywords = pageKeywords
+				seo.Image = ogImage
+			}
+			if isWebAppType {
+				ssrRoutes[normalizedPath] = seo.toRouteValue()
+			}
+		}
 		if _, ok := listing["serviceDetail"]; !ok && looksLikeDetailURI(normalizedPath) {
 			log.Printf("SSR warn: detail URL %s (domain=%s app=%s table=%s) — no serviceDetail in listing",
 				normalizedPath, domain, route.AppID, route.TblServiceDetail)
 		}
 	}
+	markStage("listing")
 
 	appConfig := map[string]any{"f_logo": route.FLogo, "f_title": pageTitle}
 	if routeLogo := absoluteAssetURL(route.FLogo, protocol, hostStr); routeLogo != "" {
@@ -495,6 +679,7 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 	if monolith := buildMonolithBootstrapScript(ctx.RM, host, rpIndex); monolith != "" {
 		scripts = monolith + scripts
 	}
+	markStage("scripts")
 
 	preload := ""
 	if strings.HasPrefix(ogImage, "http://") || strings.HasPrefix(ogImage, "https://") {
@@ -503,7 +688,7 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 	pageType := resolveSSRPageType(initialData)
 
 	filePath := ctx.RM.GetStaticFile(indexPath)
-	if filePath == "" && strings.HasPrefix(DomainFromHost(host), "admin.") {
+	if filePath == "" && isAdminRoute {
 		for _, candidate := range []string{"admin/index.html", "index.html"} {
 			if p := ctx.RM.GetStaticFile(candidate); p != "" {
 				filePath = p
@@ -521,11 +706,11 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 	}
 
 	if filePath != "" {
-		raw, err := os.ReadFile(filePath)
+		raw, err := readSSRShellFile(filePath)
 		if err == nil {
 			lowerFilePath := strings.ToLower(filePath)
 			if strings.Contains(lowerFilePath, string(os.PathSeparator)+"frontend"+string(os.PathSeparator)+"index.html") || strings.Contains(lowerFilePath, string(os.PathSeparator)+"admin"+string(os.PathSeparator)+"index.html") {
-				html, tplErr := renderPublicShellTemplate(string(raw), publicShellData{
+				html, tplErr := renderPublicShellTemplate(raw, publicShellData{
 					Lang:            lang,
 					BaseURL:         baseURL,
 					Title:           pageTitle,
@@ -544,12 +729,13 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 					InjectedScripts: template.HTML(scripts),
 				})
 				if tplErr == nil {
+					markStage("template")
 					return html
 				}
 				log.Printf("SSR template render failed for %s: %v", filePath, tplErr)
 			}
 
-			html := string(raw)
+			html := raw
 			preprocessHTML(&html, &preprocessCtx{
 				Title:           pageTitle,
 				Description:     pageDescription,
@@ -574,11 +760,13 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 			})
 			finalizeThymeleafHTML(&html, &preprocessCtx{GTag: route.GTag})
 			injectIntoHTML(&html, preload+scripts)
+			markStage("template")
 			return html
 		}
 	}
 
 	log.Printf("SSR fallback (index.html not found for rp_index=%s)", rpIndex)
+	markStage("fallback")
 	return fallbackHTML(&preprocessCtx{
 		Title:           pageTitle,
 		Description:     pageDescription,
@@ -601,6 +789,45 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 		InitialData:     initialData,
 		Categories:      categories,
 	}, uri, route.AppID, rpIndex, scripts)
+}
+
+func isSSRStageProfileEnabled() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("SSR_PROFILE_STAGES")))
+	switch v {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func resolveSSRSlowLogThreshold() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("SSR_SLOW_LOG_MS"))
+	if raw == "" {
+		return ssrSlowLogDefault
+	}
+	ms, err := strconv.Atoi(raw)
+	if err != nil || ms <= 0 {
+		return ssrSlowLogDefault
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
+func formatSSRStageDurations(stages map[string]time.Duration) string {
+	if len(stages) == 0 {
+		return "-"
+	}
+	ordered := []string{"route", "categories", "seo", "listing", "scripts", "template", "fallback"}
+	parts := make([]string, 0, len(ordered))
+	for _, key := range ordered {
+		if d, ok := stages[key]; ok {
+			parts = append(parts, fmt.Sprintf("%s=%dms", key, d.Milliseconds()))
+		}
+	}
+	if len(parts) == 0 {
+		return "-"
+	}
+	return strings.Join(parts, " ")
 }
 
 func resolveSSRHostForDev(host, queryStr string) string {
@@ -651,9 +878,6 @@ func resolveRoute(rm *data.RecordManager, host, path string) resolvedRoute {
 	}
 
 	domainCandidates := []string{domain}
-	if domain == "localhost" || domain == "127.0.0.1" {
-		domainCandidates = append(domainCandidates, "localhost:3333", "csmbridge.net")
-	}
 
 	fCase := normalizeFCase(path)
 
@@ -709,7 +933,12 @@ func queryReactCatchAllRoute(rm *data.RecordManager, domain string) (resolvedRou
 		{Field: "rp_index", FilterType: "noteq", Value: ""},
 		model.EqFilter("run", 1),
 	}}
-	rows := rowsFrom(rm.Filter("csm", "sys_la_routers", filter))
+	rows := filterRouterRowsByDomainAliases(rowsFrom(rm.Filter("csm", "sys_la_routers", filter)), []model.SearchFilter{model.EqFilter("domain_name", domain)})
+	if len(rows) == 0 {
+		if altFilter, ok := rewriteRouterDomainEqToLike(filter); ok {
+			rows = filterRouterRowsByDomainAliases(rowsFrom(rm.Filter("csm", "sys_la_routers", altFilter)), []model.SearchFilter{model.EqFilter("domain_name", domain)})
+		}
+	}
 	if len(rows) == 0 {
 		return resolvedRoute{}, false
 	}
@@ -840,7 +1069,12 @@ func normalizeTableAppID(appID string) string {
 
 func queryRoute(rm *data.RecordManager, conditions []model.SearchFilter) (resolvedRoute, bool) {
 	filter := model.SearchFilter{Operator: "AND", Conditions: conditions}
-	rows := rowsFrom(rm.Filter("csm", "sys_la_routers", filter))
+	rows := filterRouterRowsByDomainAliases(rowsFrom(rm.Filter("csm", "sys_la_routers", filter)), conditions)
+	if len(rows) == 0 {
+		if altFilter, ok := rewriteRouterDomainEqToLike(filter); ok {
+			rows = filterRouterRowsByDomainAliases(rowsFrom(rm.Filter("csm", "sys_la_routers", altFilter)), conditions)
+		}
+	}
 	if len(rows) == 0 {
 		return resolvedRoute{}, false
 	}
@@ -849,6 +1083,65 @@ func queryRoute(rm *data.RecordManager, conditions []model.SearchFilter) (resolv
 		return resolvedRoute{}, false
 	}
 	return best, true
+}
+
+func filterRouterRowsByDomainAliases(rows []map[string]any, conditions []model.SearchFilter) []map[string]any {
+	domain := routerDomainConditionValue(conditions)
+	if domain == "" {
+		return rows
+	}
+	filtered := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		if routerDomainMatches(recordStr(row, "domain_name"), domain) {
+			filtered = append(filtered, row)
+		}
+	}
+	return filtered
+}
+
+func routerDomainConditionValue(conditions []model.SearchFilter) string {
+	for _, cond := range conditions {
+		if strings.EqualFold(strings.TrimSpace(cond.Field), "domain_name") && strings.EqualFold(strings.TrimSpace(cond.FilterType), "eq") {
+			return DomainFromHost(cond.ValueString())
+		}
+	}
+	return ""
+}
+
+func rewriteRouterDomainEqToLike(filter model.SearchFilter) (model.SearchFilter, bool) {
+	changed := false
+	var rewrite func(model.SearchFilter) model.SearchFilter
+	rewrite = func(current model.SearchFilter) model.SearchFilter {
+		if len(current.Conditions) > 0 {
+			for i := range current.Conditions {
+				current.Conditions[i] = rewrite(current.Conditions[i])
+			}
+			return current
+		}
+		if strings.EqualFold(strings.TrimSpace(current.Field), "domain_name") && strings.EqualFold(strings.TrimSpace(current.FilterType), "eq") {
+			current.FilterType = "like"
+			changed = true
+		}
+		return current
+	}
+	return rewrite(filter), changed
+}
+
+func routerDomainMatches(rawDomain, requestedDomain string) bool {
+	rawDomain = strings.ToLower(strings.TrimSpace(rawDomain))
+	requestedDomain = strings.ToLower(strings.TrimSpace(requestedDomain))
+	if rawDomain == "" || requestedDomain == "" {
+		return false
+	}
+	for _, token := range strings.FieldsFunc(rawDomain, func(r rune) bool {
+		return r == ',' || r == ';' || r == '|' || r == ' ' || r == '\n' || r == '\t' || r == '\r'
+	}) {
+		token = strings.TrimSpace(strings.TrimPrefix(token, "www."))
+		if token == requestedDomain {
+			return true
+		}
+	}
+	return strings.TrimPrefix(rawDomain, "www.") == requestedDomain
 }
 
 func pickBestResolvedRoute(rows []map[string]any) (resolvedRoute, bool) {
@@ -914,6 +1207,13 @@ func resolvedRouteFromRow(row map[string]any) resolvedRoute {
 func loadCategoriesFull(rm *data.RecordManager, route resolvedRoute, domain, lang string) ([]any, map[string]any, string, string) {
 	if route.AppID == "" || route.TblServices == "" {
 		return []any{}, map[string]any{}, "", ""
+	}
+
+	cacheKey := strings.Join([]string{route.AppID, route.TblServices, domain, lang}, "|")
+	if entry, ok := ssrCategoryCache.Load(cacheKey); ok {
+		if ce, ok := entry.(*ssrCategoryCacheEntry); ok && time.Now().Before(ce.expires) {
+			return cloneAnySlice(ce.categories), cloneAnyMap(ce.dynamicTemplates), ce.mainServiceCode, ce.defaultServiceCode
+		}
 	}
 
 	filter := model.SearchFilter{
@@ -1006,8 +1306,17 @@ func loadCategoriesFull(rm *data.RecordManager, route resolvedRoute, domain, lan
 	// Keep database records unchanged, but normalize SSR category hierarchy to support
 	// the target 4-menu layout on frontend-web (including older frontend builds).
 	adaptCategoriesForTargetMenu(cats)
+	dynamicTemplates := loadDynamicCodeTemplates(rm, dynamicCodeNames)
 
-	return cats, loadDynamicCodeTemplates(rm, dynamicCodeNames), mainServiceCode, defaultServiceCode
+	ssrCategoryCache.Store(cacheKey, &ssrCategoryCacheEntry{
+		categories:         cloneAnySlice(cats),
+		dynamicTemplates:   cloneAnyMap(dynamicTemplates),
+		mainServiceCode:    mainServiceCode,
+		defaultServiceCode: defaultServiceCode,
+		expires:            time.Now().Add(ssrCategoryCacheTTL),
+	})
+
+	return cats, dynamicTemplates, mainServiceCode, defaultServiceCode
 }
 
 func adaptCategoriesForTargetMenu(cats []any) {
@@ -1392,11 +1701,19 @@ func findActiveServiceDetail(rm *data.RecordManager, route resolvedRoute, domain
 		}
 		return filterFirstRow(rm, route.AppID, route.TblServiceDetail, model.SearchFilter{Operator: "AND", Conditions: idConds})
 	}
-	// Prefix fallback: slug-{suffix} (same as Java WebSpringController)
-	if serviceCode != "" {
+	// Prefix fallback can be very expensive on long SEO slugs; keep it for short fallback candidates.
+	if serviceCode != "" && shouldUseDetailSlugPrefixFallback(slug) {
 		return findActiveServiceDetailBySlugPrefix(rm, route, domain, serviceCode, slug)
 	}
 	return nil
+}
+
+func shouldUseDetailSlugPrefixFallback(slug string) bool {
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		return false
+	}
+	return len(slug) <= ssrDetailPrefixFallbackMaxSlugLen
 }
 
 func findActiveServiceDetailBySlugPrefix(rm *data.RecordManager, route resolvedRoute, domain, serviceCode, detailSlug string) map[string]any {
@@ -1497,7 +1814,11 @@ func resolveServiceListing(
 			curID := recordStr(row, "id")
 			out["serviceDetail"] = mapDetailFullObj(rm, row, lang)
 			out["serviceCode"] = serviceCode
-			insertRelated(rm, route, domain, serviceCode, curID, lang, pageSize, out)
+			relatedTake := pageSize
+			if relatedTake > 6 {
+				relatedTake = 6
+			}
+			insertRelated(rm, route, domain, serviceCode, curID, lang, relatedTake, out)
 			return out
 		}
 	}
@@ -1511,7 +1832,11 @@ func resolveServiceListing(
 			out["serviceDetail"] = mapDetailFullObj(rm, row, lang)
 			out["serviceCode"] = serviceType
 			if serviceType != "" {
-				insertRelated(rm, route, domain, serviceType, curID, lang, pageSize, out)
+				relatedTake := pageSize
+				if relatedTake > 6 {
+					relatedTake = 6
+				}
+				insertRelated(rm, route, domain, serviceType, curID, lang, relatedTake, out)
 			}
 			return out
 		}
@@ -1567,6 +1892,16 @@ func resolveServiceListing(
 			if v, err := strconv.ParseFloat(params[triple[0]], 64); err == nil {
 				detConds = append(detConds, model.SearchFilter{Field: triple[1], FilterType: triple[2], Value: v})
 			}
+		}
+
+		if shouldUseSSRListingFastPath(params, page, lastKey) {
+			detFilter := model.SearchFilter{Operator: "AND", Conditions: detConds}
+			if pageContent, _ := category["content"].(string); pageContent != "" {
+				out["pageContent"] = pageContent
+			}
+			out["serviceCategory"] = category
+			fillListingFromPagination(out, rm, route, detFilter, pageSize, lang)
+			return out
 		}
 
 		allRows := rowsFrom(rm.Filter(route.AppID, route.TblServiceDetail, model.SearchFilter{Operator: "AND", Conditions: detConds}))
@@ -1701,6 +2036,12 @@ func resolveServiceListing(
 		}
 	}
 
+	if shouldUseSSRListingFastPath(params, page, lastKey) {
+		detFilter := model.SearchFilter{Operator: "AND", Conditions: detConds}
+		fillListingFromPagination(out, rm, route, detFilter, pageSize, lang)
+		return out
+	}
+
 	detFilter := model.SearchFilter{Operator: "AND", Conditions: detConds}
 	allRows := rowsFrom(rm.Filter(route.AppID, route.TblServiceDetail, detFilter))
 
@@ -1757,6 +2098,69 @@ func resolveServiceListing(
 	}
 
 	return out
+}
+
+func shouldUseSSRListingFastPath(params map[string]string, page int, lastKey string) bool {
+	if page != 1 {
+		return false
+	}
+	if strings.TrimSpace(lastKey) != "" {
+		return false
+	}
+	for _, key := range []string{
+		"q",
+		"propertyType",
+		"transactionType",
+		"category",
+		"platform",
+		"brand",
+		"location",
+		"legalStatus",
+		"furnished",
+		"price_min",
+		"price_max",
+		"area_min",
+		"area_max",
+	} {
+		v := strings.TrimSpace(params[key])
+		if v != "" && v != "all" {
+			return false
+		}
+	}
+	return true
+}
+
+func fillListingFromPagination(
+	out map[string]any,
+	rm *data.RecordManager,
+	route resolvedRoute,
+	filter model.SearchFilter,
+	pageSize int,
+	lang string,
+) {
+	res := rm.FilterFirstPageFast(route.AppID, route.TblServiceDetail, filter, pageSize)
+	rows := rowsFrom(res)
+	pageRows := make([]any, 0, len(rows))
+	for _, r := range rows {
+		pageRows = append(pageRows, mapDetailLite(rm, r, lang))
+	}
+	totalCount := len(pageRows)
+	if raw := strings.TrimSpace(recordStr(res, "totalCount")); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v >= 0 {
+			totalCount = v
+		}
+	}
+	out["serviceDetailList"] = pageRows
+	out["totalCount"] = totalCount
+	out["page"] = 1
+	out["pageSize"] = pageSize
+	out["take"] = pageSize
+	out["paginationMode"] = "cursor"
+	next := strings.TrimSpace(recordStr(res, "nextCursor"))
+	if next != "" {
+		out["nextCursor"] = next
+		out["lastkey"] = next
+	}
 }
 
 func resolveGroupCategory(
@@ -1823,6 +2227,9 @@ func insertRelated(
 	take int,
 	out map[string]any,
 ) {
+	if take <= 0 {
+		take = 1
+	}
 	filter := model.SearchFilter{
 		Operator: "AND",
 		Conditions: []model.SearchFilter{
@@ -1831,16 +2238,35 @@ func insertRelated(
 			{Field: "domain", FilterType: "like", Value: domain},
 		},
 	}
-	rows := rowsFrom(rm.Filter(route.AppID, route.TblServiceDetail, filter))
 	related := make([]any, 0, take)
-	for _, r := range rows {
-		if recordStr(r, "id") == curID {
-			continue
+	cursor := ""
+	batchSize := take * 4
+	if batchSize < 8 {
+		batchSize = 8
+	}
+	for range 3 {
+		page := rm.FilterWithPagination(route.AppID, route.TblServiceDetail, filter, cursor, 0, batchSize, nil)
+		rows := rowsFrom(page)
+		if len(rows) == 0 {
+			break
 		}
-		related = append(related, mapDetailLite(rm, r, lang))
+		for _, r := range rows {
+			if recordStr(r, "id") == curID {
+				continue
+			}
+			related = append(related, mapDetailLite(rm, r, lang))
+			if len(related) >= take {
+				break
+			}
+		}
 		if len(related) >= take {
 			break
 		}
+		next := strings.TrimSpace(recordStr(page, "nextCursor"))
+		if next == "" || next == cursor {
+			break
+		}
+		cursor = next
 	}
 	out["relatedDetailList"] = related
 }
@@ -1947,6 +2373,101 @@ func mapServiceCategory(rm *data.RecordManager, row map[string]any, lang string)
 		m["updated_at"] = v
 	}
 	return m
+}
+
+func applyServiceCategorySeoOverrides(cat map[string]any, lang string, pageTitle, pageDescription, pageKeywords, canonical, ogImage string) (string, string, string, string, string) {
+	if cat == nil {
+		return pageTitle, pageDescription, pageKeywords, canonical, ogImage
+	}
+
+	catTitle := firstNonEmpty(recordStr(cat, "category"), recordStr(cat, "title"), recordStr(cat, "name"), pageTitle)
+	catDescription := firstNonEmpty(recordStr(cat, "description"), pageDescription)
+	catKeywords := firstNonEmpty(recordStr(cat, "keywords"), pageKeywords)
+	catCanonical := canonical
+	catImage := ogImage
+
+	if seoMeta := parseCategorySeoMeta(cat["seo_meta"]); len(seoMeta) > 0 {
+		if meta := chooseCategorySeoLangMeta(seoMeta, lang); len(meta) > 0 {
+			catTitle = firstNonEmpty(meta["meta_title"], meta["title"], catTitle)
+			catDescription = firstNonEmpty(meta["meta_description"], meta["description"], catDescription)
+			catKeywords = firstNonEmpty(meta["keywords"], catKeywords)
+			catCanonical = firstNonEmpty(meta["canonical"], catCanonical)
+			catImage = firstNonEmpty(meta["og_image"], meta["ogImage"], catImage)
+		}
+	}
+
+	return catTitle, catDescription, catKeywords, catCanonical, catImage
+}
+
+func parseCategorySeoMeta(raw any) map[string]map[string]string {
+	if raw == nil {
+		return nil
+	}
+	var payload map[string]any
+	switch v := raw.(type) {
+	case string:
+		if strings.TrimSpace(v) == "" || v == "{}" {
+			return nil
+		}
+		if err := json.Unmarshal([]byte(v), &payload); err != nil {
+			return nil
+		}
+	case map[string]any:
+		payload = v
+	case map[string]string:
+		out := make(map[string]map[string]string, len(v))
+		for lang, item := range v {
+			out[lang] = map[string]string{"meta_title": item}
+		}
+		return out
+	default:
+		return nil
+	}
+	if len(payload) == 0 {
+		return nil
+	}
+	out := make(map[string]map[string]string, len(payload))
+	for lang, item := range payload {
+		fields := map[string]string{}
+		switch m := item.(type) {
+		case map[string]any:
+			for key, val := range m {
+				fields[key] = strings.TrimSpace(fmt.Sprint(val))
+			}
+		case map[string]string:
+			for key, val := range m {
+				fields[key] = strings.TrimSpace(val)
+			}
+		default:
+			fields["meta_title"] = strings.TrimSpace(fmt.Sprint(m))
+		}
+		out[lang] = fields
+	}
+	return out
+}
+
+func chooseCategorySeoLangMeta(meta map[string]map[string]string, lang string) map[string]string {
+	if len(meta) == 0 {
+		return nil
+	}
+	if item, ok := meta["vi"]; ok && len(item) > 0 {
+		return item
+	}
+	return nil
+}
+
+func shouldApplyServiceCategorySeoOverrides(initialData map[string]any) bool {
+	if len(initialData) == 0 {
+		return false
+	}
+	cat, ok := initialData["serviceCategory"].(map[string]any)
+	if !ok || len(cat) == 0 {
+		return false
+	}
+	if _, hasDetail := initialData["serviceDetail"]; hasDetail {
+		return false
+	}
+	return true
 }
 
 func buildJSONLD(ctx *preprocessCtx) string {

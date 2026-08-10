@@ -505,10 +505,34 @@ export function getRelativeTime(dateString?: string): string {
 function applyDetailToPost(post: ServicePost, detail: any): ServicePost {
   if (!detail) return post;
   
+  const resolveSeoMeta = (raw: any): Record<string, any> => {
+    const seoMeta = parseJSON<Record<string, any>>(raw, {});
+    if (!seoMeta || typeof seoMeta !== 'object') return {};
+
+    const currentLang = String(i18n.language || 'vi').slice(0, 2).toLowerCase();
+    const langCandidate = seoMeta[currentLang];
+    if (langCandidate && typeof langCandidate === 'object') return langCandidate;
+
+    for (const fallbackLang of ['vi', 'en', 'zh']) {
+      const candidate = seoMeta[fallbackLang];
+      if (candidate && typeof candidate === 'object') return candidate;
+    }
+
+    return seoMeta;
+  };
+
+  const seoMeta = resolveSeoMeta(detail?.seo_meta);
   const imagesArr: string[] = parseJSON<string[]>(detail?.images, []);
   (post as any).images = imagesArr;
   
-  post.content = detail?.content_html || post.content || "";
+  const resolvedTitle = seoMeta?.meta_title || detail?.title || detail?.name || post.title;
+  const resolvedExcerpt = seoMeta?.meta_description || detail?.summary || detail?.excerpt || post.excerpt || "";
+  post.title = resolvedTitle || post.title;
+  post.excerpt = resolvedExcerpt || post.excerpt || "";
+  post.content = detail?.content_html || detail?.content || post.content || "";
+  if (!post.thumbnail && seoMeta?.og_image) {
+    post.thumbnail = String(seoMeta.og_image);
+  }
   
   const features = parseJSON<string[]>(detail?.features, []);
   const relatedServices = parseJSON<string[]>(detail?.related_services, []);
@@ -519,9 +543,14 @@ function applyDetailToPost(post: ServicePost, detail: any): ServicePost {
       flatSpecs[key] = detail[key];
     }
   });
+  const seoKeywords = String(seoMeta?.keywords || '')
+    .split(',')
+    .map((s: string) => s.trim())
+    .filter(Boolean);
   const mergedAttrs = {
     ...post.attributes,
     ...flatSpecs,
+    __seo: seoMeta,
     __detail: {
       features,
       relatedServices,
@@ -529,6 +558,9 @@ function applyDetailToPost(post: ServicePost, detail: any): ServicePost {
     },
   };
   post.attributes = mergedAttrs;
+  if (seoKeywords.length > 0) {
+    post.tags = seoKeywords;
+  }
   return post;
 }
 
@@ -719,9 +751,20 @@ export async function fetchServiceDetail(category: string, id: string) {
   if (!post && detailRow) {
     // Build a minimal post from detail to satisfy UI; keep data centralized
     const serviceType: string = (detailRow.service_type || category || 'phan-mem').toString();
-    const seoMeta = parseJSON<Record<string, any>>(detailRow.seo_meta, {});
-    const title = seoMeta?.meta_title || 'Dịch vụ';
-    const excerpt = seoMeta?.meta_description || '';
+    const seoMeta = (() => {
+      const rawSeo = parseJSON<Record<string, any>>(detailRow.seo_meta, {});
+      if (!rawSeo || typeof rawSeo !== 'object') return {};
+      const currentLang = String(i18n.language || 'vi').slice(0, 2).toLowerCase();
+      const langCandidate = rawSeo[currentLang];
+      if (langCandidate && typeof langCandidate === 'object') return langCandidate;
+      for (const fallbackLang of ['vi', 'en', 'zh']) {
+        const candidate = rawSeo[fallbackLang];
+        if (candidate && typeof candidate === 'object') return candidate;
+      }
+      return rawSeo;
+    })();
+    const title = seoMeta?.meta_title || detailRow.title || detailRow.name || 'Dịch vụ';
+    const excerpt = seoMeta?.meta_description || detailRow.summary || detailRow.excerpt || '';
     const specifications = parseJSON<Record<string, any>>(detailRow.specifications, {});
     const attributes = {
       ...specifications,
@@ -734,15 +777,15 @@ export async function fetchServiceDetail(category: string, id: string) {
       id: String(detailRow.service_id || detailRow.id || idStr),
       title,
       excerpt,
-      content: '',
+      content: detailRow.content_html || detailRow.content || '',
       category: serviceType,
       serviceType,
-      thumbnail: detailRow.thumbnail || detailRow.cover || '',
+      thumbnail: detailRow.thumbnail || detailRow.cover || String(seoMeta?.og_image || ''),
       publishDate: String(detailRow.created_at || detailRow.updated_at || ''),
       readTime: '',
       expiryDate: '',
       views: 0,
-      tags: String(seoMeta?.keywords || '').split(',').map(s => s.trim()).filter(Boolean),
+      tags: String(seoMeta?.keywords || detailRow.tags || '').split(',').map(s => s.trim()).filter(Boolean),
       featured: false,
       activeHome: false,
       attributes,
