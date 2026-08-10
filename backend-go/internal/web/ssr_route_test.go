@@ -80,3 +80,16 @@ func TestPickBestResolvedRoutePrefersWebForPublicHost(t *testing.T) {
 		t.Fatalf("expected public host to prefer web route, got %q", route.RPIndex)
 	}
 }
+
+func TestFinalizeSSRRouteDoesNotHardcodeDomainFallbacks(t *testing.T) {
+	rm, cleanup := pebbleDataAvailable(t)
+	defer cleanup()
+
+	route := finalizeSSRRoute(resolvedRoute{Domain: "unknown-example.test"}, rm, "unknown-example.test")
+	if route.AppID == "lmkt" || route.AppID == "wuweb" {
+		t.Fatalf("expected no hardcoded app_id fallback, got %q", route.AppID)
+	}
+	if route.TblServices == "web_services" && route.AppID == "" {
+		t.Fatalf("expected tables to stay dynamic, got %+v", route)
+	}
+}

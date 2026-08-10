@@ -208,8 +208,8 @@ func ResolveRPIndexPub(rm *data.RecordManager, host string) string {
 		},
 	}
 	result := rm.Filter("csm", "sys_la_routers", filter)
-	for _, row := range rowsFrom(result) {
-		if rp := strings.Trim(strings.Trim(recordStr(row, "rp_index"), "/"), " "); rp != "" {
+	if best, ok := pickBestResolvedRoute(rowsFrom(result)); ok {
+		if rp := strings.Trim(strings.Trim(best.RPIndex, "/"), " "); rp != "" {
 			return rp
 		}
 	}
@@ -813,38 +813,6 @@ func finalizeSSRRoute(route resolvedRoute, rm *data.RecordManager, host string) 
 	route.AppID = normalizeTableAppID(route.AppID)
 	route.TblServices = normalizeTableName(route.AppID, route.TblServices)
 	route.TblServiceDetail = normalizeTableName(route.AppID, route.TblServiceDetail)
-
-	if route.AppID == "" || route.TblServices == "" || route.TblServiceDetail == "" {
-		d := strings.ToLower(strings.TrimSpace(route.Domain))
-		isLmkt := strings.Contains(d, "h-holding") || strings.Contains(d, "lmkt")
-		isCsm := strings.Contains(d, "csmbridge") || strings.Contains(d, "localhost") || strings.Contains(d, "127.0.0.1") || strings.HasSuffix(d, ".local")
-
-		if isLmkt {
-			if route.AppID == "" {
-				route.AppID = "lmkt"
-			}
-			if route.TblServices == "" {
-				route.TblServices = "web_services"
-			}
-			if route.TblServiceDetail == "" {
-				route.TblServiceDetail = "web_service_detail"
-			}
-		} else if isCsm {
-			if route.AppID == "" {
-				route.AppID = "wuweb"
-			}
-			if route.TblServices == "" {
-				route.TblServices = "web_services"
-			}
-			if route.TblServiceDetail == "" {
-				route.TblServiceDetail = "web_service_detail"
-			}
-		}
-
-		route.AppID = normalizeTableAppID(route.AppID)
-		route.TblServices = normalizeTableName(route.AppID, route.TblServices)
-		route.TblServiceDetail = normalizeTableName(route.AppID, route.TblServiceDetail)
-	}
 	return route
 }
 
