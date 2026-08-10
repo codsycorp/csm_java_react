@@ -200,7 +200,7 @@ func ResolveRPIndexPub(rm *data.RecordManager, host string) string {
 	filter := model.SearchFilter{
 		Operator: "AND",
 		Conditions: []model.SearchFilter{
-			{Field: "domain_name", FilterType: "like", Value: domain},
+			model.EqFilter("domain_name", domain),
 			model.EqFilter("f_case", ""),
 			{Field: "rp_index", FilterType: "isnotnull"},
 			{Field: "rp_index", FilterType: "noteq", Value: ""},
@@ -660,7 +660,7 @@ func resolveRoute(rm *data.RecordManager, host, path string) resolvedRoute {
 	// Priority 1: exact domain + f_case (Java WebSpringController / Rust resolve_route)
 	for _, candidate := range domainCandidates {
 		if route, ok := queryRoute(rm, []model.SearchFilter{
-			{Field: "domain_name", FilterType: "like", Value: candidate},
+			model.EqFilter("domain_name", candidate),
 			model.EqFilter("f_case", fCase),
 			model.EqFilter("run", 1),
 		}); ok {
@@ -680,7 +680,7 @@ func resolveRoute(rm *data.RecordManager, host, path string) resolvedRoute {
 	// Priority 3a: domain + app_type=web
 	for _, candidate := range domainCandidates {
 		if route, ok := queryRoute(rm, []model.SearchFilter{
-			{Field: "domain_name", FilterType: "like", Value: candidate},
+			model.EqFilter("domain_name", candidate),
 			model.EqFilter("app_type", "web"),
 			model.EqFilter("run", 1),
 		}); ok {
@@ -703,7 +703,7 @@ func resolveRoute(rm *data.RecordManager, host, path string) resolvedRoute {
 
 func queryReactCatchAllRoute(rm *data.RecordManager, domain string) (resolvedRoute, bool) {
 	filter := model.SearchFilter{Operator: "AND", Conditions: []model.SearchFilter{
-		{Field: "domain_name", FilterType: "like", Value: domain},
+		model.EqFilter("domain_name", domain),
 		model.EqFilter("f_case", ""),
 		{Field: "rp_index", FilterType: "isnotnull"},
 		{Field: "rp_index", FilterType: "noteq", Value: ""},
