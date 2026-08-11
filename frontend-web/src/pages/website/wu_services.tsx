@@ -1766,14 +1766,8 @@ const WuServicesPage: React.FC = () => {
   const formatDate = (date?: string) => date ? new Date(date).toLocaleDateString() : "";
   // Build SEO friendly href for service detail
   const getServiceDetailUrl = (post: ServicePost) => {
-    const langCode = (currentLang && currentLang !== 'vi') ? currentLang.split('-')[0].slice(0,2) : '';
-    const serviceCategory = ssrServiceCategory as any;
-    const serviceCode = String(serviceCategory?.service_code || '').trim();
-    const serviceSlug = String(serviceCategory?.slug || '').trim();
-    const isLandingAlias = Boolean(serviceCode && serviceSlug && serviceCode !== serviceSlug && String(post?.slug || '').trim() === serviceSlug);
-    let url = isLandingAlias ? `/${serviceCode}` : `/${post.serviceType}/${post.slug}`;
-    url = localizePath(url, langCode || 'vi');
-    return url;
+    const langCode = resolveSupportedLang(currentLang || 'vi');
+    return localizePath(`/${post.serviceType}/${post.slug}`, langCode);
   };
 
   // Hàm render search box đặc thù cho từng lĩnh vực

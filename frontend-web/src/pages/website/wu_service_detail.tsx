@@ -41,6 +41,7 @@ import {
   ZoomInOutlined, ZoomOutOutlined, RotateLeftOutlined, RotateRightOutlined
 } from '@ant-design/icons';
 import WebsiteLayout from '#src/layout/website/WebsiteLayout';
+import WuServices from './wu_services';
 import { 
   getRelativeTime, 
   formatExpiryDate,
@@ -548,10 +549,31 @@ function useServiceDetailAndRelated(category: string | undefined, id: string | u
       const currentSearch = w?.location?.search || '';
       let initial = w && (w.__INITIAL_REACT_DATA__ || w.initialReactData);
 
+      const matchesRequestedDetail = (detail: any): boolean => {
+        if (!detail || !id) return false;
+        const requested = String(id || '').trim().toLowerCase();
+        if (!requested) return false;
+        const candidates = [
+          detail.slug,
+          detail.id,
+          detail.service_id,
+          detail.serviceId,
+        ]
+          .map((value) => String(value || '').trim().toLowerCase())
+          .filter(Boolean);
+        return candidates.includes(requested);
+      };
+
       const hasCurrentInlineSSR = Boolean(
         initial
-        && isSameSSRPagePath(initial.currentPagePath, currentPath)
-        && (initial.serviceDetail || (Array.isArray(initial.serviceDetailList) && initial.serviceDetailList.length > 0))
+        && (
+          isSameSSRPagePath(initial.currentPagePath, currentPath)
+          || matchesRequestedDetail(initial.serviceDetail)
+        )
+        && (
+          initial.serviceDetail
+          || (Array.isArray(initial.serviceDetailList) && initial.serviceDetailList.length > 0)
+        )
       );
 
       if (!hasCurrentInlineSSR) {
@@ -564,7 +586,15 @@ function useServiceDetailAndRelated(category: string | undefined, id: string | u
         }
       }
 
-      if (initial && isSameSSRPagePath(initial.currentPagePath, currentPath)) {
+      const canUseInitialSSR = Boolean(
+        initial
+        && (
+          isSameSSRPagePath(initial.currentPagePath, currentPath)
+          || matchesRequestedDetail(initial.serviceDetail)
+        )
+      );
+
+      if (canUseInitialSSR) {
         try {
           // Main detail post from SSR
           if (initial.serviceDetail) {
@@ -1703,6 +1733,18 @@ export default function WuServiceDetail() {
     }
     return cleanSlug;
   }, [slug, category, location.search]); // Re-compute when slug OR search params change
+
+  const normalizedSegments = React.useMemo(() => {
+    return normalizeWebsitePath(location.pathname).split('/').filter(Boolean);
+  }, [location.pathname]);
+
+  const isListingPathButMatchedDetail = React.useMemo(() => {
+    const isLangToken = category === 'vi' || category === 'en' || category === 'zh';
+    return Boolean(slug) && isLangToken && normalizedSegments.length === 1 && normalizedSegments[0] === slug;
+  }, [category, slug, normalizedSegments]);
+
+  const effectiveCategory = isListingPathButMatchedDetail ? slug : category;
+  const effectiveId = isListingPathButMatchedDetail ? undefined : id;
   
   const RELATED_PAGE_SIZE = 12;
 
@@ -1759,7 +1801,7 @@ export default function WuServiceDetail() {
     }
   }, [location.search, relatedPage]);
 
-  const { post, relatedPosts, totalRelated, loading, error } = useServiceDetailAndRelated(category, id);
+  const { post, relatedPosts, totalRelated, loading, error } = useServiceDetailAndRelated(effectiveCategory, effectiveId);
 
   
   // Get multilingual fields from post
@@ -1954,6 +1996,10 @@ export default function WuServiceDetail() {
         return React.createElement(GenericDetail, { post, t });
     }
   };
+
+  if (isListingPathButMatchedDetail) {
+    return <WuServices />;
+  }
 
   // ...existing code...
 
