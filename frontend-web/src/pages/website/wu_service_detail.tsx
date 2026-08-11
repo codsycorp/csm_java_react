@@ -116,8 +116,23 @@ const resolveSupportedLang = (raw?: string | null): 'vi' | 'en' | 'zh' => {
   return 'vi';
 };
 
+const stripBasePathname = (pathname: string): string => {
+  const rawPath = pathname || '/';
+  const base = String((import.meta as any)?.env?.BASE_URL || '/').trim();
+  if (!base || base === '/') return rawPath;
+  const normalizedBase = base.endsWith('/') ? base.slice(0, -1) : base;
+  if (!normalizedBase || normalizedBase === '/') return rawPath;
+  if (rawPath === normalizedBase) return '/';
+  if (rawPath.startsWith(`${normalizedBase}/`)) {
+    const stripped = rawPath.slice(normalizedBase.length);
+    return stripped.startsWith('/') ? stripped : `/${stripped}`;
+  }
+  return rawPath;
+};
+
 const resolveLangFromPathname = (pathname: string): 'vi' | 'en' | 'zh' => {
-  const first = String(pathname || '').trim().split('/').filter(Boolean)[0] || '';
+  const strippedPath = stripBasePathname(pathname);
+  const first = String(strippedPath || '').trim().split('/').filter(Boolean)[0] || '';
   return resolveSupportedLang(first);
 };
 
@@ -132,7 +147,8 @@ const localizePath = (path: string, rawLang?: string | null): string => {
 };
 
 const normalizeWebsitePath = (path?: string): string => {
-  const normalized = String(path || '/').split('?')[0].replace(/\/+$/g, '') || '/';
+  const pathWithoutBase = stripBasePathname(String(path || '/').split('?')[0]);
+  const normalized = String(pathWithoutBase || '/').replace(/\/+$/g, '') || '/';
   const stripped = normalized.replace(/^\/(vi|en|zh)(?=\/|$)/i, '') || '/';
   return stripped.startsWith('/') ? stripped : `/${stripped}`;
 };
