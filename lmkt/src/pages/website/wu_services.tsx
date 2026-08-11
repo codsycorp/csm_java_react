@@ -12,31 +12,52 @@ function getDefaultCategorySlug() {
 import React, { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { useLocation, useNavigate } from "react-router";
 import i18n from "i18next";
+
+const resolveSupportedLang = (raw?: string | null): 'vi' | 'en' | 'zh' => {
+  const norm = String(raw || '').trim().toLowerCase();
+  if (norm.startsWith('en')) return 'en';
+  if (norm.startsWith('zh')) return 'zh';
+  return 'vi';
+};
+
+const resolveLangFromPathname = (pathname: string): 'vi' | 'en' | 'zh' => {
+  const first = String(pathname || '').trim().split('/').filter(Boolean)[0] || '';
+  return resolveSupportedLang(first);
+};
+
+const localizePath = (path: string, rawLang?: string | null): string => {
+  const lang = resolveSupportedLang(rawLang);
+  const normalized = (path.startsWith('/') ? path : `/${path}`).replace(/\/+/g, '/');
+  const withoutLangPrefix = normalized.replace(/^\/(vi|en|zh)(?=\/|$)/i, '') || '/';
+  const basePath = withoutLangPrefix.startsWith('/') ? withoutLangPrefix : `/${withoutLangPrefix}`;
+  if (lang === 'vi') return basePath;
+  if (basePath === '/') return `/${lang}`;
+  return `/${lang}${basePath}`;
+};
+
 // Hook đổi ngôn ngữ theo ?hl= trên URL
 function useLanguageFromQuery() {
   const location = useLocation();
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const hl = params.get("hl");
-    // Chuẩn hóa mã ngôn ngữ về dạng đầy đủ để khớp resource: vi-VN, en-US, zh-CN
-    let targetLang: string | undefined;
-    if (hl === "vi") targetLang = "vi-VN";
-    else if (hl === "en") targetLang = "en-US";
-    else if (hl === "zh") targetLang = "zh-CN";
-    // Áp dụng nếu có yêu cầu đổi ngôn ngữ
-    if (targetLang) {
-      i18n.changeLanguage(targetLang);
-      // Xóa ?hl nếu là tiếng Việt để giữ URL sạch
-      if (hl === "vi") {
-        const url = new URL(window.location.href);
-        params.delete("hl");
-        url.search = params.toString();
-        window.history.replaceState({}, '', url.pathname + url.search + url.hash);
-      }
-    } else if (!i18n.language || i18n.language === "" || i18n.language === "cimode") {
-      i18n.changeLanguage("vi-VN");
+    const langFromPath = resolveLangFromPathname(location.pathname);
+    const targetLang = hl ? resolveSupportedLang(hl) : langFromPath;
+
+    if (hl === 'vi' || hl === 'en' || hl === 'zh') {
+      const url = new URL(window.location.href);
+      params.delete('hl');
+      const cleanQuery = params.toString();
+      const targetPath = localizePath(location.pathname, targetLang);
+      const targetUrl = `${targetPath}${cleanQuery ? `?${cleanQuery}` : ''}${url.hash}`;
+      window.location.replace(targetUrl);
+      return;
     }
-  }, [location.search]);
+
+    if (i18n.language !== targetLang) {
+      i18n.changeLanguage(targetLang);
+    }
+  }, [location.pathname, location.search]);
 }
 import {
   Card,
@@ -422,6 +443,10 @@ const renderCardMedia = (post: ServicePost, categoryKey: string, altText: string
       alt={altText}
       src={src}
       loading="lazy"
+      decoding="async"
+      fetchPriority="low"
+      width={640}
+      height={360}
       onError={(e) => { (e.currentTarget as HTMLImageElement).src = placeholder; }}
       style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
     />
@@ -709,7 +734,6 @@ const WuServicesPage: React.FC = () => {
       }
       
       const searchUrl = `${currentPath}?${queryParams.toString()}`;
-      console.log('🔍 Fetching search results from:', searchUrl);
       
       // Security: Set timeout to prevent hanging requests
       const controller = new AbortController();
@@ -741,11 +765,6 @@ const WuServicesPage: React.FC = () => {
       if (scriptMatch && scriptMatch[1]) {
         try {
           const data = JSON.parse(scriptMatch[1]);
-          console.log('✅ Parsed search results:', {
-            serviceDetailList: data.serviceDetailList?.length || 0,
-            homeDetailList: data.homeDetailList?.length || 0,
-            totalCount: data.totalCount,
-          });
           
           // Update services with search results (normalize to keep serviceType, attributes, etc.)
           const resultList = data.serviceDetailList || data.homeDetailList || [];
@@ -1302,7 +1321,6 @@ const WuServicesPage: React.FC = () => {
   // Kiểm tra slug có hợp lệ không (không phải group route thì phải là valid category slug)
   useEffect(() => {
     if (slug && !isGroupRoute && !allCategories.some(c => c.key === slug)) {
-      console.warn(`❌ Invalid category slug: ${slug}, redirecting to home`);
       navigate("/", { replace: true });
     }
   }, [slug, allCategories, isGroupRoute, navigate]);
@@ -1315,7 +1333,6 @@ const WuServicesPage: React.FC = () => {
       if (window.location.pathname === targetUrl) {
         return;
       }
-      console.log(`🔄 Redirecting group route /${slug} to default service: ${targetUrl}`);
       window.location.href = targetUrl;
     }
   }, [isGroupRoute, slug, allCategories]);
@@ -1346,11 +1363,8 @@ const WuServicesPage: React.FC = () => {
   // Khi đổi tab: reload trang với URL mới, SSR sẽ xử lý
   const handleTabChange = (key: string) => {
     if (key !== activeTabKey) {
-      let url = `/${key}`;
-      const langCode = (currentLang && currentLang !== 'vi') ? currentLang.split('-')[0].slice(0, 2) : '';
-      if (langCode && langCode !== 'vi') {
-        url += `?hl=${langCode}`;
-      }
+      const langCode = resolveSupportedLang(currentLang || 'vi');
+      const url = localizePath(`/${key}`, langCode);
       window.location.href = url;
     }
   }
@@ -1396,10 +1410,8 @@ const WuServicesPage: React.FC = () => {
   const formatDate = (date?: string) => date ? new Date(date).toLocaleDateString() : "";
   // Build SEO friendly href for service detail
   const getServiceDetailUrl = (post: ServicePost) => {
-    const langCode = (currentLang && currentLang !== 'vi') ? currentLang.split('-')[0].slice(0,2) : '';
-    let url = `/${post.serviceType}/${post.slug}`;
-    if (langCode && langCode !== 'vi') url += `?hl=${langCode}`;
-    return url;
+    const langCode = resolveSupportedLang(currentLang || 'vi');
+    return localizePath(`/${post.serviceType}/${post.slug}`, langCode);
   };
 
   // Hàm render search box đặc thù cho từng lĩnh vực
@@ -1408,7 +1420,6 @@ const WuServicesPage: React.FC = () => {
     const values = searchValues[category.key] || {};
     
     const handleSearchSubmit = async () => {
-      console.log('🔍 Search submitted for', category.key, 'with values:', values);
       setError(null);
       
       // Mark as submitted for UI state
@@ -1424,12 +1435,9 @@ const WuServicesPage: React.FC = () => {
         setSearchSubmitted(s => ({ ...s, [category.key]: false }));
         setSearchUsedServer(prev => ({ ...prev, [category.key]: false }));
         setPagination(prev => ({ ...prev, [category.key]: 1 }));
-        const url = new URL(window.location.href);
-        const langParam = url.searchParams.get('hl');
-        url.pathname = `/${category.key}`;
-        url.search = '';
-        if (langParam) url.searchParams.set('hl', langParam);
-        window.location.href = url.toString();
+        const langCode = resolveSupportedLang(i18nInstance.language || 'vi');
+        const url = localizePath(`/${category.key}`, langCode);
+        window.location.href = url;
       }
     };
     
@@ -1707,12 +1715,6 @@ const WuServicesPage: React.FC = () => {
 
       // Server handles pagination logic entirely; client sets page only
       queryParams.set('page', String(newPage));
-
-      // Add language for non-vi
-      const currentLang = i18nInstance.language || 'vi';
-      if (currentLang !== 'vi' && /^[a-z]{2}$/.test(currentLang)) {
-        queryParams.set('hl', currentLang);
-      }
 
       const newUrl = `${currentPath}?${queryParams.toString()}`;
       window.location.href = newUrl;
@@ -2464,11 +2466,6 @@ const WuServicesPage: React.FC = () => {
       const w: any = typeof window !== 'undefined' ? window : undefined;
       const initialData = w && (w.__INITIAL_REACT_DATA__ || w.initialReactData);
       
-      // Debug: log toàn bộ initialData
-      console.log('🔍 SSR initialData keys:', initialData ? Object.keys(initialData) : 'null');
-      console.log('🔍 Current activeTabKey:', activeTabKey);
-      console.log('🔍 URL path:', window.location.pathname);
-      
       let dataList = null;
       let totalCount = 0;
       
@@ -2477,14 +2474,7 @@ const WuServicesPage: React.FC = () => {
         if (Array.isArray(initialData.serviceDetailList) && initialData.serviceDetailList.length > 0) {
           dataList = initialData.serviceDetailList;
           totalCount = Number(initialData.totalCount) || dataList.length;
-          console.log('📊 Using serviceDetailList (category page):', {
-            count: dataList.length,
-            totalCount: totalCount,
-            page: initialData.page,
-            pageSize: initialData.pageSize
-          });
         } else {
-          console.warn('⚠️ serviceDetailList exists but is empty or not array:', initialData.serviceDetailList);
         }
       }
       
@@ -2493,10 +2483,6 @@ const WuServicesPage: React.FC = () => {
         if (Array.isArray(initialData.homeDetailList) && initialData.homeDetailList.length > 0) {
           dataList = initialData.homeDetailList;
           totalCount = Number(initialData.totalCount) || dataList.length;
-          console.log('📊 Using homeDetailList (homepage):', {
-            count: dataList.length,
-            totalCount: totalCount
-          });
         }
       }
       
@@ -2505,14 +2491,11 @@ const WuServicesPage: React.FC = () => {
         const allData = (dataList as any[]).map((r: any) => normalizeServiceDetail(r)) as ServicePost[];
         setServices(allData);
         setTotal(totalCount);
-        console.log('✅ Set services:', allData.length, 'total:', totalCount);
         setLoading(false);
         return;
       } else {
-        console.warn('⚠️ No valid data found in SSR initialData');
       }
     } catch (e) {
-      console.error('❌ Error loading SSR data:', e);
     }
 
     // Fallback: không có dữ liệu

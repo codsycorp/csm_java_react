@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/json"
 	"log"
 	"net/http"
 	"strconv"
@@ -14,16 +13,18 @@ import (
 	"csm_server/backend-go/internal/model"
 	"csm_server/backend-go/internal/security"
 	"csm_server/backend-go/internal/services"
+	"csm_server/backend-go/internal/socket"
 )
 
 type AuthHandler struct {
 	rm  *data.RecordManager
 	us  *services.UserService
 	jwt *security.JWTUtil
+	hub *socket.Hub
 }
 
-func NewAuthHandler(rm *data.RecordManager, us *services.UserService, jwt *security.JWTUtil) *AuthHandler {
-	return &AuthHandler{rm: rm, us: us, jwt: jwt}
+func NewAuthHandler(rm *data.RecordManager, us *services.UserService, jwt *security.JWTUtil, hub *socket.Hub) *AuthHandler {
+	return &AuthHandler{rm: rm, us: us, jwt: jwt, hub: hub}
 }
 
 func (h *AuthHandler) HandleLogin(params map[string]any) *model.StandardResponse {
@@ -42,6 +43,12 @@ func (h *AuthHandler) HandleLogin(params map[string]any) *model.StandardResponse
 		resp.Set("code", 401)
 		resp.Set("success", false)
 		resp.Set("message", "Định danh hoặc mật khẩu không hợp lệ")
+		return resp
+	}
+	if security.AccountExpired(*user) {
+		resp.Set("code", 403)
+		resp.Set("success", false)
+		resp.Set("message", "Tài khoản đã hết hạn sử dụng")
 		return resp
 	}
 
@@ -74,31 +81,18 @@ func (h *AuthHandler) HandleLogin(params map[string]any) *model.StandardResponse
 	jwtToken := h.jwt.GenerateTokenWithUID(tokenSubject, deref(user.ID), nextVersion)
 	csrf := uuid.NewString()
 
-	result := map[string]any{
-		"token":        jwtToken,
-		"refreshToken": refreshToken,
-		"csrfToken":    csrf,
-		"dev":          isDev,
-	}
-	copyIfSet(result, "app_token", user.AppToken)
-	copyIfSet(result, "app_id", user.AppID)
-	copyIfSet(result, "userId", user.ID)
-	copyIfSet(result, "username", user.Username)
-	copyIfSet(result, "email", user.Email)
-	copyIfSet(result, "phoneNumber", user.PhoneNumber)
-	copyIfSet(result, "full_name", user.FullName)
-	copyIfSet(result, "avatar", user.Avatar)
-	if len(user.UserAddress) > 0 {
-		var addr any
-		if err := json.Unmarshal(user.UserAddress, &addr); err == nil {
-			result["user_address"] = addr
-			result["user_adress"] = addr
-		}
-	}
+	result := userInfoMapFromUser(user)
+	result["token"] = jwtToken
+	result["refreshToken"] = refreshToken
+	result["csrfToken"] = csrf
+	result["dev"] = isDev
 
 	enrichAccountMeta(h.rm, user, result)
 	enrichAsyncRoutes(h.rm, user, result)
 	result["dev"] = isDev
+	if h.hub != nil {
+		h.hub.EmitForceLogout(deref(user.ID), "session_replaced", "Tài khoản đã đăng nhập ở thiết bị khác, phiên hiện tại đã bị đăng xuất.", nextVersion)
+	}
 
 	resp.Set("code", 200)
 	resp.Set("success", true)
@@ -115,6 +109,12 @@ func (h *AuthHandler) HandleUserInfo(auth *security.AuthUser, params map[string]
 
 	if rt, ok := params["refreshTokenHeader"].(string); ok && rt != "" {
 		if user := h.us.FindUserByRefreshToken(rt, false); user != nil {
+			if security.AccountExpired(*user) {
+				resp.Set("code", 403)
+				resp.Set("success", false)
+				resp.Set("message", "Tài khoản đã hết hạn sử dụng")
+				return resp
+			}
 			if security.RefreshSessionValid(*user, clientIP, clientUA, clientID) {
 				if token, ok := params["csm-token"].(string); ok && token != "" {
 					if !security.UserMatchesCSMToken(h.jwt, token, *user) {
@@ -137,6 +137,12 @@ func (h *AuthHandler) HandleUserInfo(auth *security.AuthUser, params map[string]
 	if token, ok := params["csm-token"].(string); ok && token != "" {
 		if h.jwt.ValidateToken(token) {
 			if user := h.us.ResolveFromJWT(h.jwt, token); user != nil {
+				if security.AccountExpired(*user) {
+					resp.Set("code", 403)
+					resp.Set("success", false)
+					resp.Set("message", "Tài khoản đã hết hạn sử dụng")
+					return resp
+				}
 				if claims, err := h.jwt.ParseClaims(token); err == nil {
 					if !security.UserMatchesJWTHints(*user, claims.UID, claims.Sub) {
 						resp.Set("code", 401)
@@ -195,6 +201,12 @@ func (h *AuthHandler) HandleRefreshToken(params map[string]any) *model.StandardR
 		resp.Set("message", "Invalid refresh token")
 		return resp
 	}
+	if security.AccountExpired(*user) {
+		resp.Set("code", 403)
+		resp.Set("success", false)
+		resp.Set("message", "Tài khoản đã hết hạn sử dụng")
+		return resp
+	}
 
 	version := derefInt(user.LoginVersion)
 	newRefresh := uuid.NewString() + uuid.NewString()
@@ -226,6 +238,12 @@ func (h *AuthHandler) HandleLogout(auth *security.AuthUser, params map[string]an
 		user := h.us.CanonicalizeSessionUser(*auth)
 		if user == nil {
 			user = authUserToModel(*auth)
+		}
+		if security.AccountExpired(*user) {
+			resp.Set("code", 403)
+			resp.Set("success", false)
+			resp.Set("message", "Tài khoản đã hết hạn sử dụng")
+			return resp
 		}
 		h.us.ClearSessionToken(user)
 	}
@@ -454,7 +472,7 @@ func sessionContextFromParams(params map[string]any) (ip, ua, clientID string) {
 
 func sessionClientIDFromParams(params map[string]any) string {
 	if v, ok := params["_client_id"].(string); ok {
-		return strings.TrimSpace(v)
+		return security.NormalizeClientSessionID(v)
 	}
 	return ""
 }

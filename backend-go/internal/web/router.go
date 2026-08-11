@@ -3,11 +3,40 @@ package web
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
+	"sort"
 	"strings"
 
 	"csm_server/backend-go/internal/model"
 	"csm_server/backend-go/internal/state"
 )
+
+func shouldInjectVisibleSSRBody(r *http.Request, query string) bool {
+	override := strings.ToLower(strings.TrimSpace(QSParam(query, "ssr_visible")))
+	switch override {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	}
+
+	ua := strings.ToLower(strings.TrimSpace(r.Header.Get("User-Agent")))
+	if ua == "" {
+		return false
+	}
+
+	botMarkers := []string{
+		"googlebot", "adsbot", "bingbot", "duckduckbot", "baiduspider", "yandexbot", "slurp", "applebot",
+		"facebookexternalhit", "twitterbot", "linkedinbot", "telegrambot", "whatsapp", "discordbot",
+		"crawler", "spider",
+	}
+	for _, marker := range botMarkers {
+		if strings.Contains(ua, marker) {
+			return true
+		}
+	}
+	return false
+}
 
 func parseAliasTags(raw string) []string {
 	raw = strings.TrimSpace(raw)
@@ -35,6 +64,179 @@ func parseAliasTags(raw string) []string {
 		}
 	}
 	return aliases
+}
+
+func canonicalizeLangQuery(query string) (string, bool) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return "", false
+	}
+	vals, err := url.ParseQuery(query)
+	if err != nil {
+		return query, false
+	}
+	raw := strings.ToLower(strings.TrimSpace(vals.Get("hl")))
+	if raw == "" {
+		return vals.Encode(), false
+	}
+
+	changed := false
+	switch {
+	case strings.HasPrefix(raw, "vi"):
+		vals.Del("hl")
+		changed = true
+	case strings.HasPrefix(raw, "en"):
+		if raw != "en" {
+			vals.Set("hl", "en")
+			changed = true
+		}
+	case strings.HasPrefix(raw, "zh"):
+		if raw != "zh" {
+			vals.Set("hl", "zh")
+			changed = true
+		}
+	default:
+		vals.Del("hl")
+		changed = true
+	}
+
+	encoded := vals.Encode()
+	if !changed && encoded != query {
+		return encoded, true
+	}
+	return encoded, changed
+}
+
+func canonicalizeNonLangQuery(query string) string {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return ""
+	}
+	vals, err := url.ParseQuery(query)
+	if err != nil {
+		return query
+	}
+	vals.Del("hl")
+	keys := make([]string, 0, len(vals))
+	for k := range vals {
+		if strings.TrimSpace(k) == "" {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		encodedKey := url.QueryEscape(k)
+		vs := vals[k]
+		if len(vs) == 0 {
+			parts = append(parts, encodedKey+"=")
+			continue
+		}
+		for _, v := range vs {
+			parts = append(parts, encodedKey+"="+url.QueryEscape(v))
+		}
+	}
+	return strings.Join(parts, "&")
+}
+
+func resolveLangFromPath(path string) (string, string) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" || trimmed == "/" {
+		return "", "/"
+	}
+	if !strings.HasPrefix(trimmed, "/") {
+		trimmed = "/" + trimmed
+	}
+	segments := strings.Split(strings.TrimPrefix(trimmed, "/"), "/")
+	if len(segments) == 0 {
+		return "", "/"
+	}
+	first := strings.ToLower(strings.TrimSpace(segments[0]))
+	if first != "en" && first != "zh" && first != "vi" {
+		return "", trimmed
+	}
+	if len(segments) == 1 {
+		return first, "/"
+	}
+	return first, "/" + strings.Join(segments[1:], "/")
+}
+
+func localizedPath(path, lang string) string {
+	path = NormalizeIncomingWebPath(path)
+	if path == "" {
+		path = "/"
+	}
+	lang = strings.ToLower(strings.TrimSpace(lang))
+	if lang != "en" && lang != "zh" {
+		return path
+	}
+	if path == "/" {
+		return "/" + lang
+	}
+	return "/" + lang + path
+}
+
+func redirectCanonicalLocalizedPath(w http.ResponseWriter, r *http.Request, uri, query string) (string, string, bool) {
+	canonicalQuery, _ := canonicalizeLangQuery(query)
+	baseQuery := canonicalizeNonLangQuery(canonicalQuery)
+
+	pathLang, basePath := resolveLangFromPath(uri)
+	queryLang := ""
+	if canonicalQuery != "" {
+		queryLang = strings.ToLower(strings.TrimSpace(QSParam(canonicalQuery, "hl")))
+	}
+	if queryLang == "vi" {
+		queryLang = ""
+	}
+
+	targetLang := pathLang
+	if targetLang == "vi" {
+		targetLang = ""
+	}
+	if queryLang != "" {
+		targetLang = queryLang
+	}
+
+	targetPath := localizedPath(basePath, targetLang)
+	target := targetPath
+	if baseQuery != "" {
+		target += "?" + baseQuery
+	}
+
+	currentPath := NormalizeIncomingWebPath(uri)
+	currentTarget := currentPath
+	if canonicalQuery != "" {
+		currentTarget += "?" + canonicalQuery
+	}
+	if target != currentTarget {
+		http.Redirect(w, r, target, http.StatusMovedPermanently)
+		return "", "", true
+	}
+
+	normalizedQuery := baseQuery
+	if targetLang == "en" || targetLang == "zh" {
+		if normalizedQuery == "" {
+			normalizedQuery = "hl=" + targetLang
+		} else {
+			normalizedQuery += "&hl=" + targetLang
+		}
+	}
+
+	return basePath, normalizedQuery, false
+}
+
+func redirectCanonicalLangQuery(w http.ResponseWriter, r *http.Request, uri, query string) bool {
+	canonicalQuery, changed := canonicalizeLangQuery(query)
+	if !changed {
+		return false
+	}
+	target := uri
+	if canonicalQuery != "" {
+		target += "?" + canonicalQuery
+	}
+	http.Redirect(w, r, target, http.StatusMovedPermanently)
+	return true
 }
 
 func redirectCanonicalCategoryPath(st *state.AppState, w http.ResponseWriter, r *http.Request, uri, host, query string) bool {
@@ -100,8 +302,12 @@ func redirectCanonicalCategoryPath(st *state.AppState, w http.ResponseWriter, r 
 		if len(parts) > 1 {
 			target += "/" + strings.Join(parts[1:], "/")
 		}
-		if query != "" {
-			target += "?" + query
+		canonicalQuery, _ := canonicalizeLangQuery(query)
+		lang := strings.ToLower(strings.TrimSpace(QSParam(canonicalQuery, "hl")))
+		target = localizedPath(target, lang)
+		queryWithoutLang := canonicalizeNonLangQuery(canonicalQuery)
+		if queryWithoutLang != "" {
+			target += "?" + queryWithoutLang
 		}
 		http.Redirect(w, r, target, http.StatusMovedPermanently)
 		return true
@@ -112,6 +318,12 @@ func redirectCanonicalCategoryPath(st *state.AppState, w http.ResponseWriter, r 
 
 func HandleWebPath(st *state.AppState, w http.ResponseWriter, r *http.Request, uri, host, query string) {
 	uri = NormalizeIncomingWebPath(uri)
+	if normalizedURI, normalizedQuery, redirected := redirectCanonicalLocalizedPath(w, r, uri, query); redirected {
+		return
+	} else {
+		uri = normalizedURI
+		query = normalizedQuery
+	}
 	if redirectCanonicalCategoryPath(st, w, r, uri, host, query) {
 		return
 	}
@@ -196,7 +408,12 @@ func HandleWebPath(st *state.AppState, w http.ResponseWriter, r *http.Request, u
 	}
 
 	ctx := SSRContext{RM: st.RecordManager}
-	html := RenderPage(ctx, uri, host, query)
+	injectVisibleBody := shouldInjectVisibleSSRBody(r, query)
+	if shouldNoIndexSSRQuery(parseQS(query)) {
+		w.Header().Set("X-Robots-Tag", "noindex,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1")
+	}
+	w.Header().Add("Vary", "User-Agent")
+	html := RenderPage(ctx, uri, host, query, injectVisibleBody)
 	writeTextCached(w, http.StatusOK, "text/html; charset=utf-8", html, "public, max-age=60, stale-while-revalidate=300, stale-if-error=600")
 }
 
@@ -206,10 +423,21 @@ func ServeStatic(st *state.AppState, w http.ResponseWriter, r *http.Request, uri
 
 func ServeSSR(st *state.AppState, w http.ResponseWriter, r *http.Request, uri, host, query string) {
 	uri = NormalizeIncomingWebPath(uri)
+	if normalizedURI, normalizedQuery, redirected := redirectCanonicalLocalizedPath(w, r, uri, query); redirected {
+		return
+	} else {
+		uri = normalizedURI
+		query = normalizedQuery
+	}
 	if redirectCanonicalCategoryPath(st, w, r, uri, host, query) {
 		return
 	}
 	ctx := SSRContext{RM: st.RecordManager}
-	html := RenderPage(ctx, uri, host, query)
+	injectVisibleBody := shouldInjectVisibleSSRBody(r, query)
+	if shouldNoIndexSSRQuery(parseQS(query)) {
+		w.Header().Set("X-Robots-Tag", "noindex,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1")
+	}
+	w.Header().Add("Vary", "User-Agent")
+	html := RenderPage(ctx, uri, host, query, injectVisibleBody)
 	writeTextCached(w, http.StatusOK, "text/html; charset=utf-8", html, "public, max-age=60, stale-while-revalidate=300, stale-if-error=600")
 }

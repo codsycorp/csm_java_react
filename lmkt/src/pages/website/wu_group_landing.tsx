@@ -47,6 +47,23 @@ const getLocalized = (cat: SSRCategory | undefined, lang: string, field: 'catego
   return (cat as any)[field] || '';
 };
 
+const resolveSupportedLang = (raw?: string | null): 'vi' | 'en' | 'zh' => {
+  const norm = String(raw || '').trim().toLowerCase();
+  if (norm.startsWith('en')) return 'en';
+  if (norm.startsWith('zh')) return 'zh';
+  return 'vi';
+};
+
+const localizePath = (path: string, rawLang?: string | null): string => {
+  const lang = resolveSupportedLang(rawLang);
+  const normalized = (path.startsWith('/') ? path : `/${path}`).replace(/\/+/g, '/');
+  const withoutLangPrefix = normalized.replace(/^\/(vi|en|zh)(?=\/|$)/i, '') || '/';
+  const basePath = withoutLangPrefix.startsWith('/') ? withoutLangPrefix : `/${withoutLangPrefix}`;
+  if (lang === 'vi') return basePath;
+  if (basePath === '/') return `/${lang}`;
+  return `/${lang}${basePath}`;
+};
+
 export default function WuGroupLandingPage() {
   const { slug } = useParams<{ slug: string }>();
   const { i18n, t } = useTranslation();
@@ -69,9 +86,7 @@ export default function WuGroupLandingPage() {
   const content = sanitizeHtml(group?.content || '');
 
   const withLang = (path: string) => {
-    if (lang.startsWith('vi')) return path;
-    const code = lang.slice(0, 2);
-    return `${path}?hl=${code}`;
+    return localizePath(path, lang);
   };
 
   return (

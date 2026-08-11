@@ -7,13 +7,13 @@ export function extractLangAndSlug(path: string): { lang: string, slug: string }
   let lang = "vi";
   let working = path.trim();
   if (working.startsWith("/")) working = working.slice(1);
-  const segs = working.split("/");
+  const segs = working.split("/").filter(Boolean);
   if (segs.length > 0 && SUPPORTED_LANGS.includes(segs[0].toLowerCase())) {
     lang = segs[0].toLowerCase();
     segs.shift();
   }
   // Remove .shtml or .html
-  let slug = segs.join("/").replace(/\.(s?html?)$/, "");
+  let slug = segs.join("/").replace(/\.(s?html?)$/, "").replace(/^\/+|\/+$/g, "");
   return { lang, slug };
 }
 

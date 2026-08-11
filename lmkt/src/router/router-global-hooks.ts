@@ -58,6 +58,26 @@ function isGroupRoute(cat: any): boolean {
 	return cat && typeof cat === 'object' && cat.is_group_slug === true;
 }
 
+function extractWebsiteLangPrefix(pathname: string): '' | 'en' | 'zh' {
+	const first = String(pathname || '').split('/').filter(Boolean)[0] || '';
+	if (first === 'en' || first === 'zh') return first;
+	return '';
+}
+
+function stripWebsiteLangPrefix(pathname: string): string {
+	const normalized = (pathname || '/').replace(/\/+$/g, '') || '/';
+	const stripped = normalized.replace(/^\/(vi|en|zh)(?=\/|$)/i, '') || '/';
+	return stripped.startsWith('/') ? stripped : `/${stripped}`;
+}
+
+function withWebsiteLangPrefix(pathname: string, langPrefix: '' | 'en' | 'zh'): string {
+	const normalized = (pathname || '/').startsWith('/') ? (pathname || '/') : `/${pathname}`;
+	const basePath = stripWebsiteLangPrefix(normalized);
+	if (!langPrefix) return basePath;
+	if (basePath === '/') return `/${langPrefix}`;
+	return `/${langPrefix}${basePath}`;
+}
+
 // Helper: Find default service for a group route (is_group_slug_default === true)
 function findDefaultServiceForGroup(groupSlug: string): any {
 	const categories = (window.__SSR_WEBSITE_CATEGORIES__ as Array<any>) || [];
@@ -89,11 +109,12 @@ export function isWebsiteMode() {
 
 // Check if current path is a website route
 function isWebsiteRoute(pathname: string) {
-	if (BLOCKED_WEBSITE_ROUTES.has(pathname)) {
+	const normalizedPath = stripWebsiteLangPrefix(pathname);
+	if (BLOCKED_WEBSITE_ROUTES.has(normalizedPath)) {
 		return false;
 	}
 	// [PROD] Removed debug log: isWebsiteRoute check
-	if (websiteRoutes.includes(pathname)) {
+	if (websiteRoutes.includes(normalizedPath)) {
 		// [PROD] Removed debug log: Found in websiteRoutes
 		return true;
 	}
@@ -104,7 +125,7 @@ function isWebsiteRoute(pathname: string) {
 		return cat && typeof cat === 'object' && typeof cat.slug === 'string';
 	}
 	for (const cat of categories) {
-		if (isSSRCategory(cat) && pathname === `/${cat.slug}`) {
+		if (isSSRCategory(cat) && normalizedPath === `/${cat.slug}`) {
 			// [PROD] Removed debug log: Found in SSR categories
 			return true;
 		}
@@ -113,14 +134,14 @@ function isWebsiteRoute(pathname: string) {
 	// Kiểm tra xem có phải group route không (is_group_slug === true)
 	// Now using clean URLs (no .shtml)
 	for (const cat of categories) {
-		if (isGroupRoute(cat) && pathname === `/${cat.slug}`) {
+		if (isGroupRoute(cat) && normalizedPath === `/${cat.slug}`) {
 			return true; // Allow group routes
 		}
 	}
 	
 	// Kiểm tra pattern /category/slug - CHỈ validate category, không validate slug
 	// Now using clean URLs (no .shtml)
-	const detailMatch = pathname.match(/^\/([^/]+)\/[^/]+$/);
+	const detailMatch = normalizedPath.match(/^\/([^/]+)\/[^/]+$/);
 	if (detailMatch) {
 		const category = detailMatch[1];
 		// Kiểm tra category có trong SSR categories không
@@ -131,7 +152,7 @@ function isWebsiteRoute(pathname: string) {
 	}
 	
 	// Mở rộng: các trang tiền tố wu_ thuộc website
-	if (/^\/wu_/i.test(pathname)) {
+	if (/^\/wu_/i.test(normalizedPath)) {
 		console.log("  → Matches /wu_ pattern");
 		return true;
 	}
@@ -161,6 +182,8 @@ export const routerBeforeEach: (reactRouter: ReactRouterType) => BlockerFunction
 
 	const { pathname, search } = nextLocation;
 	const pathnameWithoutBase = replaceBaseWithRoot(pathname);
+	const langPrefix = extractWebsiteLangPrefix(pathnameWithoutBase);
+	const pathnameForChecks = stripWebsiteLangPrefix(pathnameWithoutBase);
 
 	/* 是否登录 */
 	const isLogin = Boolean(useUserStore.getState().userId);
@@ -169,8 +192,8 @@ export const routerBeforeEach: (reactRouter: ReactRouterType) => BlockerFunction
 
 	// Bổ sung kiểm tra chi tiết dịch vụ: /:category/:slug (clean URLs, no .shtml)
 	// CHỈ validate category exists trong SSR, KHÔNG validate slug vì slug là dynamic từ database
-	if (isWebsiteMode() && /^\/[^/]+\/[^/]+$/.test(pathnameWithoutBase)) {
-		const match = pathnameWithoutBase.match(/^\/([^/]+)\/([^/]+)$/);
+	if (isWebsiteMode() && /^\/[^/]+\/[^/]+$/.test(pathnameForChecks)) {
+		const match = pathnameForChecks.match(/^\/([^/]+)\/([^/]+)$/);
 		const category = match ? match[1] : undefined;
 		const ssrCategories = (window.__SSR_WEBSITE_CATEGORIES__ as Array<any>) || [];
 		
@@ -188,7 +211,7 @@ export const routerBeforeEach: (reactRouter: ReactRouterType) => BlockerFunction
 			console.warn(`❌ Invalid category: ${category}`);
 			console.warn(`Available categories:`, ssrCategories.map(cat => cat.slug));
 			// Redirect về home
-			reactRouter.navigate("/", { replace: true });
+			reactRouter.navigate(withWebsiteLangPrefix("/", langPrefix), { replace: true });
 			return true;
 		}
 		// Category hợp lệ, cho phép navigation (slug sẽ được validate bởi component/API)
@@ -200,8 +223,8 @@ export const routerBeforeEach: (reactRouter: ReactRouterType) => BlockerFunction
 
 	// Handle group routes: DO NOT redirect, let WuServices component handle it
 	// When accessing a group route like /du-an, the WuServices component will load data for the default service
-	if (isWebsite && /^\/[^/]+$/.test(pathnameWithoutBase) && pathnameWithoutBase !== "/") {
-		const groupSlug = pathnameWithoutBase.slice(1); // Remove leading /
+	if (isWebsite && /^\/[^/]+$/.test(pathnameForChecks) && pathnameForChecks !== "/") {
+		const groupSlug = pathnameForChecks.slice(1); // Remove leading /
 		const categories = (window.__SSR_WEBSITE_CATEGORIES__ as Array<any>) || [];
 		
 		// Check if this is a group route
@@ -216,7 +239,7 @@ export const routerBeforeEach: (reactRouter: ReactRouterType) => BlockerFunction
 	/* debug info removed for production */
 
 	/* 路由白名单 - 总是允许访问 */
-	if (baseNoLoginWhiteList.includes(pathnameWithoutBase)) {
+	if (baseNoLoginWhiteList.includes(pathnameWithoutBase) || baseNoLoginWhiteList.includes(pathnameForChecks)) {
 		return false;
 	}
 
@@ -229,7 +252,7 @@ export const routerBeforeEach: (reactRouter: ReactRouterType) => BlockerFunction
 		
 		// 在网站模式下，访问非网站路由时重定向到首页
 		if (isWebsite && !isWebRoute && pathnameWithoutBase !== LOGIN) {
-			reactRouter.navigate("/");
+			reactRouter.navigate(withWebsiteLangPrefix("/", langPrefix));
 			return true;
 		}
 		
@@ -263,7 +286,7 @@ export const routerBeforeEach: (reactRouter: ReactRouterType) => BlockerFunction
 		// LMKT: No admin mode, ignore redirect=admin param
 		if (redirectParam === "admin") {
 			// Ignore, redirect to home instead
-			reactRouter.navigate("/", { replace: true });
+			reactRouter.navigate(withWebsiteLangPrefix("/", langPrefix), { replace: true });
 		}
 		else if (redirectParam && redirectParam.startsWith("/")) {
 			// 如果有其他redirect参数，跳转到指定路径
@@ -272,12 +295,12 @@ export const routerBeforeEach: (reactRouter: ReactRouterType) => BlockerFunction
 		else if (isWebsite) {
 			// 在网站模式下且没有特殊redirect，只有当前不在首页时才跳转
 			if (pathname !== "/" && pathname !== import.meta.env.BASE_URL) {
-				reactRouter.navigate("/", { replace: true });
+				reactRouter.navigate(withWebsiteLangPrefix("/", langPrefix), { replace: true });
 			}
 		}
 		else {
 			// LMKT: No admin mode, redirect to website home
-			reactRouter.navigate("/", { replace: true });
+			reactRouter.navigate(withWebsiteLangPrefix("/", langPrefix), { replace: true });
 		}
 		return true;
 	}
@@ -344,8 +367,10 @@ export async function routerInitReady(reactRouter: ReactRouterType) {
 	// CHỈ validate category exists trong SSR, KHÔNG validate slug vì slug là dynamic từ database
 	if (isWebsiteMode() && typeof window !== 'undefined') {
 		const url = window.location.pathname;
-		if (/^\/[^/]+\/[^/]+$/.test(url)) {
-			const match = url.match(/^\/([^/]+)\/([^/]+)$/);
+		const langPrefix = extractWebsiteLangPrefix(url);
+		const urlForChecks = stripWebsiteLangPrefix(url);
+		if (/^\/[^/]+\/[^/]+$/.test(urlForChecks)) {
+			const match = urlForChecks.match(/^\/([^/]+)\/([^/]+)$/);
 			const category = match ? match[1] : undefined;
 			const ssrCategories = (window.__SSR_WEBSITE_CATEGORIES__ as Array<any>) || [];
 			
@@ -361,7 +386,7 @@ export async function routerInitReady(reactRouter: ReactRouterType) {
 					console.warn(`❌ Invalid category on init: ${category}`);
 					console.warn(`Available categories:`, ssrCategories.map(cat => cat.slug));
 					// Redirect về home
-					reactRouter.navigate("/", { replace: true });
+					reactRouter.navigate(withWebsiteLangPrefix("/", langPrefix), { replace: true });
 					return;
 				}
 			}

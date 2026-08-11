@@ -446,6 +446,10 @@ const renderCardMedia = (post: ServicePost, categoryKey: string, altText: string
       alt={altText}
       src={src}
       loading="lazy"
+      decoding="async"
+      fetchPriority="low"
+      width={640}
+      height={360}
       onError={(e) => { (e.currentTarget as HTMLImageElement).src = placeholder; }}
       style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
     />
@@ -496,6 +500,28 @@ const normalizeDisplayValue = (value: any, t: any) => {
   return typeof value === 'string' ? value.trim() : value;
 };
 
+const resolveSupportedLang = (raw?: string | null): 'vi' | 'en' | 'zh' => {
+  const norm = String(raw || '').trim().toLowerCase();
+  if (norm.startsWith('en')) return 'en';
+  if (norm.startsWith('zh')) return 'zh';
+  return 'vi';
+};
+
+const resolveLangFromPathname = (pathname: string): 'vi' | 'en' | 'zh' => {
+  const first = String(pathname || '').trim().split('/').filter(Boolean)[0] || '';
+  return resolveSupportedLang(first);
+};
+
+const localizePath = (path: string, rawLang?: string | null): string => {
+  const lang = resolveSupportedLang(rawLang);
+  const normalized = (path.startsWith('/') ? path : `/${path}`).replace(/\/+/g, '/');
+  const withoutLangPrefix = normalized.replace(/^\/(vi|en|zh)(?=\/|$)/i, '') || '/';
+  const basePath = withoutLangPrefix.startsWith('/') ? withoutLangPrefix : `/${withoutLangPrefix}`;
+  if (lang === 'vi') return basePath;
+  if (basePath === '/') return `/${lang}`;
+  return `/${lang}${basePath}`;
+};
+
 const WuServicesPage: React.FC = () => {
   const { t, i18n: i18nInstance } = useTranslation();
   const location = useLocation();
@@ -521,18 +547,21 @@ const WuServicesPage: React.FC = () => {
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const hl = params.get("hl");
-    if (hl === "en" || hl === "vi" || hl === "zh" || hl === "ja" || hl === "ko") {
-      i18n.changeLanguage(hl);
-      if (hl === "vi") {
-        const url = new URL(window.location.href);
-        params.delete("hl");
-        url.search = params.toString();
-        window.history.replaceState({}, '', url.pathname + url.search + url.hash);
-      }
-    } else if (!i18n.language || i18n.language === "" || i18n.language === "cimode") {
-      i18n.changeLanguage("vi");
+    const langFromPath = resolveLangFromPathname(location.pathname);
+    const targetLang = hl ? resolveSupportedLang(hl) : langFromPath;
+    if (hl === 'vi' || hl === 'en' || hl === 'zh') {
+      const url = new URL(window.location.href);
+      params.delete('hl');
+      const cleanQuery = params.toString();
+      const targetPath = localizePath(location.pathname, targetLang);
+      const targetUrl = `${targetPath}${cleanQuery ? `?${cleanQuery}` : ''}${url.hash}`;
+      window.location.replace(targetUrl);
+      return;
     }
-  }, [location.search]);
+    if (i18n.language !== targetLang) {
+      i18n.changeLanguage(targetLang);
+    }
+  }, [location.pathname, location.search]);
 
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -1213,13 +1242,6 @@ const WuServicesPage: React.FC = () => {
   // 2) Landing article from serviceDetailList (post content)
   // 3) Built-in default template for critical pages (KQXS)
   const resolveCategoryLandingContent = (categoryKey: string): string => {
-    const fromMeta = String(
-      getHeaderMeta(categoryKey)?.content
-      || (categoryKey === (slug || '') ? (initialReactData?.pageContent || '') : '')
-      || ''
-    ).trim();
-    if (fromMeta) return fromMeta;
-
     const langCode = resolveLangCode(i18n.language || 'vi');
     const categoryPosts = getPostsByServiceType(categoryKey);
 
@@ -1229,11 +1251,22 @@ const WuServicesPage: React.FC = () => {
     const fromPost = landingPost
       ? String(getMultilingualField(landingPost, 'content', langCode) || landingPost.content || '').trim()
       : '';
-    if (fromPost) return fromPost;
 
+    const fromMeta = String(
+      getHeaderMeta(categoryKey)?.content
+      || (categoryKey === (slug || '') ? (initialReactData?.pageContent || '') : '')
+      || ''
+    ).trim();
+
+    // Lottery landing is managed by uploaded content entries, so prefer post content over category CMS text.
     if (categoryKey === 'thong-ke-ket-qua-xo-so') {
+      if (fromPost) return fromPost;
+      if (fromMeta) return fromMeta;
       return DEFAULT_KQXS_LANDING_CONTENT[langCode];
     }
+
+    if (fromMeta) return fromMeta;
+    if (fromPost) return fromPost;
 
     return '';
   };
@@ -1497,9 +1530,10 @@ const WuServicesPage: React.FC = () => {
   // Lấy lang và slug từ URL
   // Lấy ngôn ngữ hiện tại từ i18n hoặc URL, fallback 'vi'
   const currentLang = i18nInstance.language && i18nInstance.language !== 'cimode' ? i18nInstance.language : 'vi';
-  const currentLangCode = String(currentLang || 'vi').split('-')[0].slice(0, 2).toLowerCase();
+  const currentLangCode = resolveSupportedLang(currentLang || 'vi');
   const nonDefaultLangCode = currentLangCode && currentLangCode !== 'vi' ? currentLangCode : '';
-  const { lang, slug } = extractLangAndSlug(location.pathname);
+  const { lang, slug: rawSlug } = extractLangAndSlug(location.pathname);
+  const slug = String(rawSlug || '').replace(/^\/+|\/+$/g, '');
   const bridgeChildSlugSet = useMemo(() => {
     const slugs = new Set<string>([
       'phan-mem',
@@ -1563,7 +1597,6 @@ const WuServicesPage: React.FC = () => {
   // Kiểm tra slug có hợp lệ không (không phải group route thì phải là valid category slug)
   useEffect(() => {
     if (slug && !isGroupRoute && !allCategories.some(c => c.key === slug) && !SPECIAL_MENU_SLUGS.has(slug)) {
-      console.warn(`❌ Invalid category slug: ${slug}, redirecting to home`);
       window.location.replace("/");
     }
   }, [slug, allCategories, isGroupRoute]);
@@ -1575,14 +1608,13 @@ const WuServicesPage: React.FC = () => {
         return;
       }
       const defaultServiceSlug = allCategories[0].key;
-      const targetUrl = `/${defaultServiceSlug}`;
+      const targetUrl = localizePath(`/${defaultServiceSlug}`, nonDefaultLangCode || 'vi');
       if (window.location.pathname === targetUrl) {
         return;
       }
-      console.log(`🔄 Redirecting group route /${slug} to default service: ${targetUrl}`);
       window.location.replace(targetUrl);
     }
-  }, [isGroupRoute, slug, allCategories]);
+  }, [isGroupRoute, slug, allCategories, nonDefaultLangCode]);
   
   // Lấy key lĩnh vực từ slug hoặc fallback
   function getCategoryKeyFromUrl() {
@@ -1608,8 +1640,7 @@ const WuServicesPage: React.FC = () => {
       if (loading || !activeTabKey || services.length > 0 || isLotteryLandingRoute) return;
 
       const langCode = nonDefaultLangCode;
-      const search = langCode ? `?hl=${langCode}` : '';
-      const data = await fetchSSRInitialDataByPath(`/${activeTabKey}`, search);
+      const data = await fetchSSRInitialDataByPath(localizePath(`/${activeTabKey}`, langCode || 'vi'), '');
       if (cancelled || !data || !Array.isArray(data.serviceDetailList) || data.serviceDetailList.length === 0) {
         return;
       }
@@ -1648,11 +1679,8 @@ const WuServicesPage: React.FC = () => {
     if (key !== activeTabKey) {
       const params = new URLSearchParams();
       const langCode = nonDefaultLangCode;
-      if (langCode) {
-        params.set('hl', langCode);
-      }
       const query = params.toString();
-      const url = query ? `/${key}?${query}` : `/${key}`;
+      const url = localizePath(`/${key}`, langCode || 'vi') + (query ? `?${query}` : '');
       window.location.href = url;
     }
   }
@@ -1744,7 +1772,7 @@ const WuServicesPage: React.FC = () => {
     const serviceSlug = String(serviceCategory?.slug || '').trim();
     const isLandingAlias = Boolean(serviceCode && serviceSlug && serviceCode !== serviceSlug && String(post?.slug || '').trim() === serviceSlug);
     let url = isLandingAlias ? `/${serviceCode}` : `/${post.serviceType}/${post.slug}`;
-    if (langCode && langCode !== 'vi') url += `?hl=${langCode}`;
+    url = localizePath(url, langCode || 'vi');
     return url;
   };
 
@@ -1757,8 +1785,6 @@ const WuServicesPage: React.FC = () => {
     const advancedFields = fields.filter(f => f.key !== (primaryField?.key || 'q'));
     
     const handleSearchSubmit = (formValues: any) => {
-      // ✅ Use form values instead of state to ensure accuracy
-      console.log('🔍 Search submitted for', category.key, 'with formValues:', formValues);
       setError(null);
       
       // Mark as submitted for UI state
@@ -1786,13 +1812,10 @@ const WuServicesPage: React.FC = () => {
         setSearchValues(s => ({ ...s, [category.key]: {} }));
       }
 
-      const currentLang = i18nInstance.language || 'vi';
-      if (currentLang !== 'vi' && /^[a-z]{2}$/i.test(currentLang)) {
-        queryParams.set('hl', currentLang);
-      }
+      const currentLang = resolveSupportedLang(i18nInstance.language || 'vi');
 
       const nextUrl = (() => {
-        const base = `/${category.key}`;
+        const base = localizePath(`/${category.key}`, currentLang);
         const qs = queryParams.toString();
         // ✅ Return clean URL without query params if form is empty
         return qs ? `${base}?${qs}` : base;
@@ -2112,19 +2135,7 @@ const WuServicesPage: React.FC = () => {
       // Query signature = domain:slug:filters
       // Same query → Same signature → Same cursor → Same data
       
-      // Add language
-      const currentLang = i18nInstance.language || 'vi';
-      if (currentLang !== 'vi' && /^[a-z]{2}$/.test(currentLang)) {
-        queryParams.set('hl', currentLang);
-      }
-      
       const newUrl = `${currentPath}?${queryParams.toString()}`;
-      console.log('📝 handlePageChange:', { 
-        newPage, 
-        searchParams: Array.from(queryParams.entries()), 
-        newUrl,
-        method: 'Preserving ALL filters in URL' 
-      });
       
       // FULL PAGE RELOAD to trigger server-side rendering with new page
       // This ensures backend handles pagination completely (SSR + cursor derivation)
@@ -2181,27 +2192,6 @@ const WuServicesPage: React.FC = () => {
       // ✅ CRITICAL FIX: Use server's total count, NOT list.length
       // Server counted filtered results, frontend must trust this
       const totalForPagination = total > 0 ? total : list.length;
-      
-      console.log('📄 computePaging (server-only):', {
-        categoryKey: category.key,
-        listLength: list.length,
-        currentPage,
-        effectivePageSize,
-        paginatedListLength: paginatedList.length,
-        useServerPagination,
-        totalForPagination,
-        totalFromServer: total,
-        source: 'Backend controls pagination completely'
-      });
-
-      // ✅ DEBUG: Log pagination info to verify server data is used
-      console.log('🔍 Pagination info before rendering:', {
-        totalCount: totalForPagination,
-        currentPage,
-        pageSize: effectivePageSize,
-        itemsOnThisPage: paginatedList.length,
-        calculatedPages: Math.ceil(totalForPagination / effectivePageSize)
-      });
       
       return { paginatedList, useServerPagination, totalForPagination, currentPage };
     };
@@ -2916,12 +2906,6 @@ const WuServicesPage: React.FC = () => {
       const urlParams = new URLSearchParams(window.location.search);
       const urlPage = parseNum(urlParams.get('page')) || 1;
       
-      // Debug: log toàn bộ initialData
-      console.log('🔍 SSR initialData keys:', initialData ? Object.keys(initialData) : 'null');
-      console.log('🔍 Current activeTabKey:', activeTabKey);
-      console.log('🔍 URL path:', window.location.pathname);
-      console.log('🔍 URL page param:', urlPage);
-      
       let dataList = null;
       let totalCount = 0;
       let nextCursor: string | null = null;
@@ -2934,15 +2918,7 @@ const WuServicesPage: React.FC = () => {
           totalCount = Number(initialData.totalCount) || dataList.length;
           nextCursor = initialData.nextCursor || null;
           ssrPage = Number(initialData.page) || urlPage;  // SSR page có ưu tiên cao hơn
-          console.log('📊 Using serviceDetailList (category page):', {
-            count: dataList.length,
-            totalCount: totalCount,
-            page: ssrPage,
-            pageSize: initialData.pageSize,
-            nextCursor
-          });
         } else {
-          console.warn('⚠️ serviceDetailList exists but is empty or not array:', initialData.serviceDetailList);
         }
       }
       
@@ -2952,18 +2928,12 @@ const WuServicesPage: React.FC = () => {
           dataList = initialData.homeDetailList;
           totalCount = Number(initialData.totalCount) || dataList.length;
           ssrPage = Number(initialData.page) || urlPage;
-          console.log('📊 Using homeDetailList (homepage):', {
-            count: dataList.length,
-            totalCount: totalCount,
-            page: ssrPage
-          });
         }
       }
       
       if (dataList && dataList.length > 0) {
         // Normalize SSR data
         const allData = (dataList as any[]).map((r: any) => normalizeServiceDetail(r)) as ServicePost[];
-        console.log('✅ Set services:', allData.length, 'total:', totalCount, 'page:', ssrPage);
         
         setServices(allData);
         setTotal(totalCount);
@@ -2977,14 +2947,11 @@ const WuServicesPage: React.FC = () => {
         if (activeTabKey) {
           setSearchUsedServer(prev => ({ ...prev, [activeTabKey]: serverPaginated }));
         }
-        console.log('✅ Set services:', allData.length, 'total:', totalCount, 'page:', ssrPage);
         setLoading(false);
         return;
       } else {
-        console.warn('⚠️ No valid data found in SSR initialData');
       }
     } catch (e) {
-      console.error('❌ Error loading SSR data:', e);
     }
 
     // Fallback: không có dữ liệu

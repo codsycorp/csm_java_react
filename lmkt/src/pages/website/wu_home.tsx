@@ -4,25 +4,58 @@ import { getDefaultCategorySlug } from "../../utils/getDefaultCategorySlug";
 import React, { useState, useEffect } from "react";
 import { useLocation } from "react-router";
 import i18n from "i18next";
+
+const resolveSupportedLang = (raw?: string | null): 'vi' | 'en' | 'zh' => {
+  const norm = String(raw || '').trim().toLowerCase();
+  if (norm.startsWith('en')) return 'en';
+  if (norm.startsWith('zh')) return 'zh';
+  return 'vi';
+};
+
+const resolveLangFromPathname = (pathname: string): 'vi' | 'en' | 'zh' => {
+  const first = String(pathname || '').trim().split('/').filter(Boolean)[0] || '';
+  return resolveSupportedLang(first);
+};
+
+const localizePath = (path: string, rawLang?: string | null): string => {
+  const lang = resolveSupportedLang(rawLang);
+  const normalized = (path.startsWith('/') ? path : `/${path}`).replace(/\/+/g, '/');
+  const withoutLangPrefix = normalized.replace(/^\/(vi|en|zh)(?=\/|$)/i, '') || '/';
+  const basePath = withoutLangPrefix.startsWith('/') ? withoutLangPrefix : `/${withoutLangPrefix}`;
+  if (lang === 'vi') return basePath;
+  if (basePath === '/') return `/${lang}`;
+  return `/${lang}${basePath}`;
+};
+
+const normalizeWebsitePath = (path?: string): string => {
+  const normalized = String(path || '/').split('?')[0].replace(/\/+$/g, '') || '/';
+  const stripped = normalized.replace(/^\/(vi|en|zh)(?=\/|$)/i, '') || '/';
+  return stripped.startsWith('/') ? stripped : `/${stripped}`;
+};
+
 // Hook đổi ngôn ngữ theo ?hl= trên URL
 function useLanguageFromQuery() {
   const location = useLocation();
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const hl = params.get("hl");
-    if (hl === "en" || hl === "vi") {
-      i18n.changeLanguage(hl);
-      // Chỉ xóa ?hl nếu là tiếng Việt để giữ URL sạch, các ngôn ngữ khác giữ nguyên
-      if (hl === "vi") {
-        const url = new URL(window.location.href);
-        params.delete("hl");
-        url.search = params.toString();
-        window.history.replaceState({}, '', url.pathname + url.search + url.hash);
-      }
-    } else if (!i18n.language || i18n.language === "" || i18n.language === "cimode") {
-      i18n.changeLanguage("vi");
+    const langFromPath = resolveLangFromPathname(location.pathname);
+    const targetLang = hl ? resolveSupportedLang(hl) : langFromPath;
+
+    if (hl === 'vi' || hl === 'en' || hl === 'zh') {
+      const url = new URL(window.location.href);
+      params.delete('hl');
+      const cleanQuery = params.toString();
+      const targetPath = localizePath(location.pathname, targetLang);
+      const targetUrl = `${targetPath}${cleanQuery ? `?${cleanQuery}` : ''}${url.hash}`;
+      window.location.replace(targetUrl);
+      return;
     }
-  }, [location.search]);
+
+    if (i18n.language !== targetLang) {
+      i18n.changeLanguage(targetLang);
+    }
+  }, [location.pathname, location.search]);
 }
 // Local lightweight type for service posts
 type ServicePost = {
@@ -106,18 +139,20 @@ export default function WuHome() {
     // Not used - sectors use direct href in render
   };
 
-  const getLangCode = () => (i18n.language && i18n.language !== 'vi' && i18n.language !== 'cimode') ? i18n.language.slice(0,2) : '';
+  const getLangCode = () => {
+    const short = resolveSupportedLang(i18n.language);
+    return short === 'vi' || i18n.language === 'cimode' ? '' : short;
+  };
   const getListingUrl = () => {
     const lang = getLangCode();
     const defaultSlug = getDefaultCategorySlug();
-    return lang && lang !== 'vi' ? `/${defaultSlug}?hl=${lang}` : `/${defaultSlug}`;
+    return localizePath(`/${defaultSlug}`, lang || 'vi');
   };
   const getContactUrl = () => '/lien-he';
   const computePostHref = (post: ServicePost) => {
     const lang = getLangCode();
-    const langParam = lang && lang !== 'vi' ? `?hl=${lang}` : '';
     if (!post.serviceType || !post.slug) return getListingUrl();
-    return `/${post.serviceType}/${post.slug}${langParam}`;
+    return localizePath(`/${post.serviceType}/${post.slug}`, lang || 'vi');
   };
 
   // Enhanced Hero Section with modern design and SEO structure
@@ -288,7 +323,7 @@ export default function WuHome() {
       selectedGroup = groupCandidates.length > 0 ? groupCandidates[0] : undefined;
     }
     if (selectedGroup) {
-      const lang = i18n.language && i18n.language !== 'cimode' ? i18n.language.slice(0,2) : 'vi';
+      const lang = resolveSupportedLang(i18n.language);
       const getTitleByLang = (cat: any) => {
         if (lang === 'en') return cat.category_en || cat.category || '';
         if (lang === 'zh') return cat.category_zh || cat.category || '';
@@ -309,7 +344,7 @@ export default function WuHome() {
           icon: iconMap[cat.icon] || <GlobalOutlined />,
           color: cat.color || '#1890ff',
           route: (() => {
-            return lang !== 'vi' ? `/${cat.slug}?hl=${lang}` : `/${cat.slug}`;
+            return localizePath(`/${cat.slug}`, lang);
           })(),
           stats: '',
         }));
@@ -392,7 +427,9 @@ export default function WuHome() {
       // SSR Home: Checking data
       
       // Check if SSR data matches current page (homepage)
-      if (initial && (initial.currentPagePath === '/' || initial.currentPagePath === (w?.location?.pathname || ''))) {
+      const ssrPath = normalizeWebsitePath(initial?.currentPagePath || '/');
+      const currentPath = normalizeWebsitePath(w?.location?.pathname || '/');
+      if (initial && (ssrPath === '/' || ssrPath === currentPath)) {
         let dataList = null;
         
         // Priority: homeDetailList (homepage) > serviceDetailList (fallback)
@@ -565,6 +602,11 @@ export default function WuHome() {
                           <img 
                             src={post.thumbnail || generatePlaceholder(post.title.substring(0, 30), '1890ff')} 
                             alt={post.title} 
+                            loading="lazy"
+                            decoding="async"
+                            fetchPriority="low"
+                            width={400}
+                            height={180}
                             style={{ height: 180, objectFit: "cover" }} 
                             onError={(e) => { 
                               const target = e.target as HTMLImageElement;
@@ -673,6 +715,11 @@ export default function WuHome() {
                             <img 
                               src={post.thumbnail || generatePlaceholder(post.title.substring(0, 30), '52c41a')} 
                               alt={post.title} 
+                              loading="lazy"
+                              decoding="async"
+                              fetchPriority="low"
+                              width={400}
+                              height={180}
                               style={{ height: 180, objectFit: "cover" }} 
                               onError={(e) => { 
                                 const target = e.target as HTMLImageElement;

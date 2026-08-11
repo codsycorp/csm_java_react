@@ -4,25 +4,58 @@ import { getDefaultCategorySlug } from "../../utils/getDefaultCategorySlug";
 import React, { useState, useEffect, useMemo } from "react";
 import { useLocation } from "react-router";
 import i18n from "i18next";
+
+const resolveSupportedLang = (raw?: string | null): 'vi' | 'en' | 'zh' => {
+  const norm = String(raw || '').trim().toLowerCase();
+  if (norm.startsWith('en')) return 'en';
+  if (norm.startsWith('zh')) return 'zh';
+  return 'vi';
+};
+
+const resolveLangFromPathname = (pathname: string): 'vi' | 'en' | 'zh' => {
+  const first = String(pathname || '').trim().split('/').filter(Boolean)[0] || '';
+  return resolveSupportedLang(first);
+};
+
+const localizePath = (path: string, rawLang?: string | null): string => {
+  const lang = resolveSupportedLang(rawLang);
+  const normalized = (path.startsWith('/') ? path : `/${path}`).replace(/\/+/g, '/');
+  const withoutLangPrefix = normalized.replace(/^\/(vi|en|zh)(?=\/|$)/i, '') || '/';
+  const basePath = withoutLangPrefix.startsWith('/') ? withoutLangPrefix : `/${withoutLangPrefix}`;
+  if (lang === 'vi') return basePath;
+  if (basePath === '/') return `/${lang}`;
+  return `/${lang}${basePath}`;
+};
+
+const normalizeWebsitePath = (path?: string): string => {
+  const normalized = String(path || '/').split('?')[0].replace(/\/+$/g, '') || '/';
+  const stripped = normalized.replace(/^\/(vi|en|zh)(?=\/|$)/i, '') || '/';
+  return stripped.startsWith('/') ? stripped : `/${stripped}`;
+};
+
 // Hook đổi ngôn ngữ theo ?hl= trên URL
 function useLanguageFromQuery() {
   const location = useLocation();
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const hl = params.get("hl");
-    if (hl === "en" || hl === "vi") {
-      i18n.changeLanguage(hl);
-      // Chỉ xóa ?hl nếu là tiếng Việt để giữ URL sạch, các ngôn ngữ khác giữ nguyên
-      if (hl === "vi") {
-        const url = new URL(window.location.href);
-        params.delete("hl");
-        url.search = params.toString();
-        window.history.replaceState({}, '', url.pathname + url.search + url.hash);
-      }
-    } else if (!i18n.language || i18n.language === "" || i18n.language === "cimode") {
-      i18n.changeLanguage("vi");
+    const langFromPath = resolveLangFromPathname(location.pathname);
+    const targetLang = hl ? resolveSupportedLang(hl) : langFromPath;
+
+    if (hl === 'vi' || hl === 'en' || hl === 'zh') {
+      const url = new URL(window.location.href);
+      params.delete('hl');
+      const cleanQuery = params.toString();
+      const targetPath = localizePath(location.pathname, targetLang);
+      const targetUrl = `${targetPath}${cleanQuery ? `?${cleanQuery}` : ''}${url.hash}`;
+      window.location.replace(targetUrl);
+      return;
     }
-  }, [location.search]);
+
+    if (i18n.language !== targetLang) {
+      i18n.changeLanguage(targetLang);
+    }
+  }, [location.pathname, location.search]);
 }
 // Local lightweight type for service posts
 type ServicePost = {
@@ -121,19 +154,21 @@ export default function WuHome() {
     // Not used - sectors use direct href in render
   };
 
-  const getLangCode = () => (i18n.language && i18n.language !== 'vi' && i18n.language !== 'cimode') ? i18n.language.slice(0,2) : '';
+  const getLangCode = () => {
+    const short = resolveSupportedLang(i18n.language);
+    return short === 'vi' || i18n.language === 'cimode' ? '' : short;
+  };
   const getListingUrl = () => {
     const lang = getLangCode();
     const defaultSlug = getDefaultCategorySlug();
-    return lang && lang !== 'vi' ? `/${defaultSlug}?hl=${lang}` : `/${defaultSlug}`;
+    return localizePath(`/${defaultSlug}`, lang || 'vi');
   };
   const getContactUrl = () => '/lien-he';
   const computePostHref = (post: ServicePost) => {
     const tags = (post.tags || []).map(s => String(s).toLowerCase());
     if (tags.includes('xem-ngay')) return '/xem-ngay';
     const lang = getLangCode();
-    const langParam = lang && lang !== 'vi' ? `?hl=${lang}` : '';
-    return `/${post.serviceType}/${post.slug}${langParam}`;
+    return localizePath(`/${post.serviceType}/${post.slug}`, lang || 'vi');
   };
 
   // Enhanced Hero Section with modern design and SEO structure
@@ -306,8 +341,8 @@ export default function WuHome() {
           icon: iconMap[cat.icon] || <GlobalOutlined />,
           color: cat.color || '#1890ff',
           route: (() => {
-            const lang = i18n.language && i18n.language !== 'cimode' ? i18n.language.slice(0,2) : 'vi';
-            return lang !== 'vi' ? `/${cat.slug}?hl=${lang}` : `/${cat.slug}`;
+            const lang = getLangCode();
+            return localizePath(`/${cat.slug}`, lang || 'vi');
           })(),
           stats: '',
         }));
@@ -323,8 +358,8 @@ export default function WuHome() {
         icon: <HomeOutlined />, 
         color: "#13c2c2",
         route: (() => {
-          const lang = i18n.language && i18n.language !== 'cimode' ? i18n.language.slice(0,2) : 'vi';
-          return lang !== 'vi' ? `/bat-dong-san?hl=${lang}` : "/bat-dong-san";
+          const lang = getLangCode();
+          return localizePath('/bat-dong-san', lang || 'vi');
         })(),
         stats: t("website.business.realestate.stats", "500+ Dự án"),
       },
@@ -378,7 +413,9 @@ export default function WuHome() {
       // SSR Home: Checking data
       
       // Check if SSR data matches current page (homepage)
-      if (initial && (initial.currentPagePath === '/' || initial.currentPagePath === (w?.location?.pathname || ''))) {
+      const ssrPath = normalizeWebsitePath(initial?.currentPagePath || '/');
+      const currentPath = normalizeWebsitePath(w?.location?.pathname || '/');
+      if (initial && (ssrPath === '/' || ssrPath === currentPath)) {
         let dataList = null;
         
         // Priority: homeDetailList (homepage) > serviceDetailList (fallback)
@@ -538,6 +575,11 @@ export default function WuHome() {
                           <img 
                             src={post.thumbnail || generatePlaceholder(post.title.substring(0, 30), '1890ff')} 
                             alt={post.title} 
+                            loading="lazy"
+                            decoding="async"
+                            fetchPriority="low"
+                            width={400}
+                            height={180}
                             style={{ height: 180, objectFit: "cover" }} 
                             onError={(e) => { 
                               const target = e.target as HTMLImageElement;
@@ -646,6 +688,11 @@ export default function WuHome() {
                             <img 
                               src={post.thumbnail || generatePlaceholder(post.title.substring(0, 30), '52c41a')} 
                               alt={post.title} 
+                              loading="lazy"
+                              decoding="async"
+                              fetchPriority="low"
+                              width={400}
+                              height={180}
                               style={{ height: 180, objectFit: "cover" }} 
                               onError={(e) => { 
                                 const target = e.target as HTMLImageElement;

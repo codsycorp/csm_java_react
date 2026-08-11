@@ -67,7 +67,7 @@ func NewAppState(cfg config.AppConfig) (*AppState, error) {
 		GoogleIndex:   googleIndex,
 		Llama:         llama,
 		AiSeo:         aiSeo,
-		AuthHandler:   handlers.NewAuthHandler(rm, us, jwt),
+		AuthHandler:   handlers.NewAuthHandler(rm, us, jwt, socketHub),
 		TableHandler:  handlers.NewTableHandler(cfg, rm, us, socketHub),
 		MenuHandler:   handlers.NewMenuHandler(rm),
 		RoleHandler:   handlers.NewRoleHandler(rm),

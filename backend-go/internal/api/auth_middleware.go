@@ -80,6 +80,9 @@ func resolveAuthUser(st *state.AppState, r *http.Request, clientIP, clientUA, cl
 			user = st.UserService.ResolveFromJWTAllowExpired(st.JWT, token)
 		}
 		if user != nil {
+			if security.AccountExpired(*user) {
+				return nil
+			}
 			claims, err := st.JWT.ParseClaims(token)
 			if err != nil {
 				claims, err = st.JWT.ParseClaimsAllowExpired(token)
@@ -96,6 +99,9 @@ func resolveAuthUser(st *state.AppState, r *http.Request, clientIP, clientUA, cl
 	for _, rt := range refreshTokenCandidates(r) {
 		user := st.UserService.FindUserByRefreshToken(rt, true)
 		if user == nil {
+			continue
+		}
+		if security.AccountExpired(*user) {
 			continue
 		}
 		if !security.RefreshSessionValidForMiddleware(*user, clientIP, clientUA, clientID) {

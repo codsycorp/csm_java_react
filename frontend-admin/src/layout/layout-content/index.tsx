@@ -5,10 +5,12 @@ import { patchDynamicRoutesWithComponent } from "#src/router/patchDynamicRoutes"
 import { GlobalSpin, Scrollbar } from "#src/components";
 import { usePermissionStore, usePreferencesStore, useTabsStore } from "#src/store";
 import { useUserStore } from "#src/store/user";
+import { useSocket } from "#src/hooks/useSocket";
 import { theme } from "antd";
 import KeepAlive, { useKeepaliveRef } from "keepalive-for-react";
 import { useLocation } from "react-router";
 import { DYNAMIC_CODE_RELOAD_EVENT, type DynamicCodeReloadDetail } from "#src/pages/system/dynamic-code/reload";
+import { message } from "#src/utils";
 
 
 export interface LayoutContentProps { }
@@ -27,11 +29,30 @@ export default function LayoutContent() {
 	const { i18n } = useTranslation();
 	const userId = useUserStore(state => state.userId);
 	const userAppId = useUserStore(state => (state.app_id || "").trim());
+	const accountExpiryAt = useUserStore(state => state.account_expiry_at);
+	const accountWarningLevel = useUserStore(state => state.account_expiry_warning_level);
+	const accountWarningMessage = useUserStore(state => state.account_expiry_warning_message);
+	useSocket({ enabled: Boolean(userId) });
 	const tabComponentCacheRef = useRef<Map<string, any>>(new Map());
 	useEffect(() => {
 		// eslint-disable-next-line no-console
 		console.log('[LayoutContent] userId:', userId, 'openTabs:', openTabs, 'pathname:', pathname);
 	}, [userId, openTabs, pathname]);
+
+	useEffect(() => {
+		if (!userId || !accountWarningMessage || !accountWarningLevel) return;
+		if (typeof window === "undefined") return;
+
+		const key = `account-expiry-warning-shown:${userId}:${accountExpiryAt}`;
+		if (window.sessionStorage.getItem(key) === "1") return;
+
+		window.sessionStorage.setItem(key, "1");
+		if (accountWarningLevel === "expired" || accountWarningLevel === "critical") {
+			message.error(accountWarningMessage);
+			return;
+		}
+		message.warning(accountWarningMessage);
+	}, [userId, accountExpiryAt, accountWarningLevel, accountWarningMessage]);
 
 
 	const normalizeTabKey = (rawKey: string) => {

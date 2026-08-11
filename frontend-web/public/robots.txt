@@ -1,3 +1,9 @@
-# https://www.robotstxt.org/robotstxt.html
+# Static fallback robots policy. Runtime backend robots.txt is authoritative in SSR mode.
 User-agent: *
-Disallow:
+Allow: /
+Disallow: /admin/
+Disallow: /api/
+Disallow: /upload.shtml
+
+Sitemap: /sitemap.xml
+Sitemap: /feed.xml

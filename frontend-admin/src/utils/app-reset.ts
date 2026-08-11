@@ -119,7 +119,7 @@ export function logoutAndReload() {
 /**
  * Force logout user and hard reload to login page to prevent stuck states.
  */
-export function forceLogoutAndReload(reason?: string) {
+export function forceLogoutAndReload(reason?: string, customMessage?: string) {
   try {
     console.warn("[Auth] Force reset due to:", reason || "unauthorized");
   } catch {}
@@ -137,7 +137,7 @@ export function forceLogoutAndReload(reason?: string) {
     // Already on login page, just show message and return
     try {
       message.warning({
-        content: i18n.t("common.sessionExpired"),
+        content: customMessage || i18n.t("common.sessionExpired"),
         duration: 2,
       });
     } catch {}
@@ -147,7 +147,7 @@ export function forceLogoutAndReload(reason?: string) {
   // Show user-friendly notification in user's language
   try {
     message.warning({
-      content: i18n.t("common.sessionExpired"),
+      content: customMessage || i18n.t("common.sessionExpired"),
       duration: 2,
     });
   } catch {}

@@ -24,13 +24,14 @@ export function LanguageButton({ ...restProps }: ButtonProps) {
  		if (typeof window !== 'undefined') {
  			if (isWebsiteMode()) {
  				const url = new URL(window.location.href);
- 				if (langKey === 'vi-VN') {
- 					url.searchParams.delete('hl');
- 				} else if (langKey === 'en-US') {
- 					url.searchParams.set('hl', 'en');
- 				} else if (langKey === 'zh-CN') {
- 					url.searchParams.set('hl', 'zh');
- 				}
+				const targetLang = langKey === 'en-US' ? 'en' : (langKey === 'zh-CN' ? 'zh' : 'vi');
+				const normalizedPath = (url.pathname || '/').replace(/\/+/g, '/');
+				const withoutLangPrefix = normalizedPath.replace(/^\/(vi|en|zh)(?=\/|$)/i, '') || '/';
+				const basePath = withoutLangPrefix.startsWith('/') ? withoutLangPrefix : `/${withoutLangPrefix}`;
+				url.pathname = targetLang === 'vi'
+					? basePath
+					: (basePath === '/' ? `/${targetLang}` : `/${targetLang}${basePath}`);
+				url.searchParams.delete('hl');
  				window.location.href = url.toString();
  			} else {
  				// Admin mode: chỉ đổi ngôn ngữ trong app, không reload và không đổi URL

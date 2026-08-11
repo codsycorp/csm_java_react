@@ -8,7 +8,7 @@ import {
 	ProFormText,
 	ProFormTextArea,
 } from "@ant-design/pro-components";
-import { Button, Card, Divider, Form, Input, message } from "antd";
+import { Alert, Button, Card, Divider, Form, Input, message } from "antd";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -17,6 +17,23 @@ export default function Profile() {
 	const currentUser = useUserStore();
 	const [loading, setLoading] = useState(false);
 	const [passwordForm] = Form.useForm();
+	const accountWarningLevel = (currentUser as any).account_expiry_warning_level as "" | "expired" | "critical" | "high" | "medium";
+	const accountWarningMessage = String((currentUser as any).account_expiry_warning_message || "").trim();
+	const accountRemainingDays = Number((currentUser as any).account_remaining_days || 0);
+	const accountExpiryDate = String((currentUser as any).account_expiry_date || "").trim();
+
+	const warningType = (() => {
+		switch (accountWarningLevel) {
+			case "expired":
+			case "critical":
+				return "error" as const;
+			case "high":
+			case "medium":
+				return "warning" as const;
+			default:
+				return "info" as const;
+		}
+	})();
 
 	const resolvePrimaryIdentity = () => {
 		const username = String(currentUser.username || "").trim();
@@ -206,6 +223,17 @@ export default function Profile() {
 
 	return (
 		<BasicContent className="max-w-4xl mx-auto p-6">
+			{(accountWarningMessage || accountExpiryDate) && (
+				<Alert
+					showIcon
+					type={warningType}
+					className="mb-4"
+					message={accountWarningMessage || "Thông tin thời hạn sử dụng tài khoản"}
+					description={accountExpiryDate
+						? `Ngày hết hạn: ${accountExpiryDate}${accountRemainingDays > 0 ? ` (${accountRemainingDays} ngày còn lại)` : ""}`
+						: undefined}
+				/>
+			)}
 			<Card title={<h2 className="text-2xl font-bold m-0">{t("personal-center.myProfile")}</h2>} bordered={false}>
 				<ProForm
 					layout="vertical"

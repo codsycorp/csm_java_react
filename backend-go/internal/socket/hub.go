@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 
 	socketio "github.com/zishang520/socket.io/v2/socket"
@@ -90,4 +91,21 @@ func (h *Hub) EmitUpdateNotification(rm *data.RecordManager, appID, table, actio
 	if appID != "csm" {
 		h.io.To(socketio.Room("csm")).Emit("csm_msg_update", notification)
 	}
+}
+
+func (h *Hub) EmitForceLogout(userID, reason, message string, loginVersion int) {
+	if h == nil || h.io == nil {
+		return
+	}
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return
+	}
+	payload := map[string]any{
+		"userId":       userID,
+		"reason":       strings.TrimSpace(reason),
+		"message":      strings.TrimSpace(message),
+		"loginVersion": loginVersion,
+	}
+	h.io.To(socketio.Room("auth:user:"+userID)).Emit("force_logout", payload)
 }

@@ -25,11 +25,11 @@ export function useWebsiteMenu() {
   React.useEffect(() => {
     function syncLangFromUrl() {
       if (typeof window !== 'undefined') {
-        const urlParams = new URLSearchParams(window.location.search);
-        const hl = urlParams.get('hl');
+        const firstSeg = String(window.location.pathname || '').split('/').filter(Boolean)[0] || '';
+        const code = firstSeg === 'en' || firstSeg === 'zh' ? firstSeg : 'vi';
         let targetLang = 'vi-VN';
-        if (hl === 'en') targetLang = 'en-US';
-        else if (hl === 'zh') targetLang = 'zh-CN';
+        if (code === 'en') targetLang = 'en-US';
+        else if (code === 'zh') targetLang = 'zh-CN';
         if (i18n.language !== targetLang) {
           changeLanguage(targetLang as import('#src/locales').LanguageType);
           i18n.changeLanguage(targetLang);
@@ -50,11 +50,15 @@ export function useWebsiteMenu() {
   }, [i18n.language, changeLanguage]);
   // Luôn lấy ngôn ngữ hiện tại từ i18n
   const lang = i18n.language || 'vi-VN';
+  const shortLang: 'vi' | 'en' | 'zh' = lang.includes('en') ? 'en' : (lang.includes('zh') ? 'zh' : 'vi');
   // Helper để build path đúng ngôn ngữ
   const buildPath = (path: string) => {
-    if (lang === 'vi' || lang === 'vi-VN') return path;
-    // Chỉ thêm ?hl=xx cho các trang wu_
-    return path + (path.includes('?') ? `&hl=${lang.slice(0,2)}` : `?hl=${lang.slice(0,2)}`);
+    const normalized = (path.startsWith('/') ? path : `/${path}`).replace(/\/+/g, '/');
+    const withoutLangPrefix = normalized.replace(/^\/(vi|en|zh)(?=\/|$)/i, '') || '/';
+    const basePath = withoutLangPrefix.startsWith('/') ? withoutLangPrefix : `/${withoutLangPrefix}`;
+    if (shortLang === 'vi') return basePath;
+    if (basePath === '/') return `/${shortLang}`;
+    return `/${shortLang}${basePath}`;
   };
   // Import SSR category object type
   const ssrCategoryObjects: SSRCategoryObject[] = (typeof window !== 'undefined' && (window as any).__SSR_WEBSITE_CATEGORIES__) || [];

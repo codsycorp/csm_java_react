@@ -35,6 +35,9 @@ func (s *UserService) mapSubUser(record map[string]any) *model.User {
 	if id, ok := record["id"].(string); ok && strings.TrimSpace(id) != "" {
 		user.ID = &id
 	}
+	if expiryAt := model.AccountExpiryFromRecord(record); expiryAt > 0 {
+		user.AccountExpiryAt = model.Int64Ptr(expiryAt)
+	}
 	if login, ok := record["login_identifier"].(string); ok && strings.TrimSpace(login) != "" {
 		user.Username = &login
 		if user.Email == nil || strings.TrimSpace(*user.Email) == "" {

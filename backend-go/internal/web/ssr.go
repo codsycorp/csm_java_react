@@ -122,6 +122,7 @@ type preprocessCtx struct {
 	Title           string
 	Description     string
 	Keywords        string
+	RobotsPolicy    string
 	Canonical       string
 	Image           string
 	SiteName        string
@@ -141,13 +142,18 @@ type preprocessCtx struct {
 	Categories      []any
 }
 
-func RenderPage(ctx SSRContext, uri, host, queryStr string) string {
+func RenderPage(ctx SSRContext, uri, host, queryStr string, includeVisibleBody bool) string {
 	host = resolveSSRHostForDev(host, queryStr)
 	hostKey := host
 	if hostKey == "" {
 		hostKey = "default"
 	}
 	cacheKey := hostKey + ":" + uri
+	if includeVisibleBody {
+		cacheKey += ":visible=1"
+	} else {
+		cacheKey += ":visible=0"
+	}
 	normalizedQS := normalizeSSRCacheQuery(queryStr)
 	if normalizedQS != "" {
 		cacheKey += "?" + normalizedQS
@@ -167,7 +173,7 @@ func RenderPage(ctx SSRContext, uri, host, queryStr string) string {
 		}
 	}
 
-	html := buildSSRHTML(ctx, uri, host, queryStr)
+	html := buildSSRHTML(ctx, uri, host, queryStr, includeVisibleBody)
 	cacheableQuery := normalizedQS == "" || isSafeSSRCacheQuery(queryStr)
 	if cacheableQuery && shouldCacheSSRPage(uri, html) {
 		ttl := resolveSSRCacheTTL(uri, html)
@@ -309,6 +315,8 @@ func ResolveRPIndexPub(rm *data.RecordManager, host string) string {
 	}
 	if route, ok := queryRoute(rm, []model.SearchFilter{
 		model.EqFilter("domain_name", domain),
+		model.EqFilter("f_case", ""),
+		model.EqFilter("app_type", "web"),
 		{Field: "rp_index", FilterType: "isnotnull"},
 		{Field: "rp_index", FilterType: "noteq", Value: ""},
 		model.EqFilter("run", 1),
@@ -318,6 +326,27 @@ func ResolveRPIndexPub(rm *data.RecordManager, host string) string {
 		}
 	}
 	if route, ok := queryReactCatchAllRoute(rm, domain); ok {
+		if rp := strings.Trim(strings.Trim(route.RPIndex, "/"), " "); rp != "" {
+			return rp
+		}
+	}
+	if route, ok := queryRoute(rm, []model.SearchFilter{
+		model.EqFilter("domain_name", domain),
+		model.EqFilter("app_type", "web"),
+		{Field: "rp_index", FilterType: "isnotnull"},
+		{Field: "rp_index", FilterType: "noteq", Value: ""},
+		model.EqFilter("run", 1),
+	}); ok {
+		if rp := strings.Trim(strings.Trim(route.RPIndex, "/"), " "); rp != "" {
+			return rp
+		}
+	}
+	if route, ok := queryRoute(rm, []model.SearchFilter{
+		model.EqFilter("domain_name", domain),
+		{Field: "rp_index", FilterType: "isnotnull"},
+		{Field: "rp_index", FilterType: "noteq", Value: ""},
+		model.EqFilter("run", 1),
+	}); ok {
 		if rp := strings.Trim(strings.Trim(route.RPIndex, "/"), " "); rp != "" {
 			return rp
 		}
@@ -474,7 +503,7 @@ func sitemapURLEntry(url, lastmod, changefreq, priority string) string {
 	return s.String()
 }
 
-func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
+func buildSSRHTML(ctx SSRContext, uri, host, queryStr string, includeVisibleBody bool) string {
 	start := time.Now()
 	profEnabled := isSSRStageProfileEnabled()
 	slowThreshold := resolveSSRSlowLogThreshold()
@@ -502,6 +531,7 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 	normalizedPath := NormalizeIncomingWebPath(uri)
 	route := finalizeSSRRoute(resolveRoute(ctx.RM, host, normalizedPath), ctx.RM, host)
 	isWebAppType := strings.EqualFold(strings.TrimSpace(route.AppType), "web")
+	allowVisibleBody := includeVisibleBody && isWebAppType
 	markStage("route")
 	domain := route.Domain
 	if domain == "" {
@@ -516,6 +546,10 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 
 	params := parseQS(queryStr)
 	lang := resolveLang(params)
+	robotsPolicy := "index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1"
+	if shouldNoIndexSSRQuery(params) {
+		robotsPolicy = "noindex,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1"
+	}
 
 	protocol := "https"
 	hostStr := host
@@ -653,21 +687,22 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 		"app_id":          route.AppID,
 	}
 
-	// Check if this is the lottery statistics page
-	if segments := strings.Split(strings.TrimPrefix(normalizedPath, "/"), "/"); len(segments) > 0 {
-		lastSegment := segments[len(segments)-1]
-		if lastSegment == "thong-ke-ket-qua-xo-so" {
-			initialData["isSpecialPage"] = true
-		}
-	}
-
 	// Keep data hydration independent from static index availability: local/dev routes may omit rp_index.
 	if isWebAppType && route.AppID != "" && route.TblServiceDetail != "" {
 		listing := resolveServiceListing(ctx.RM, route, domain, normalizedPath, params, mainServiceCode, defaultServiceCode)
 		enrichInitialData(initialData, listing, protocol, hostStr)
+		applySpecialPageHint(initialData)
 		if shouldApplyServiceCategorySeoOverrides(initialData) {
 			cat := initialData["serviceCategory"].(map[string]any)
 			pageTitle, pageDescription, pageKeywords, canonical, ogImage = applyServiceCategorySeoOverrides(cat, lang, pageTitle, pageDescription, pageKeywords, canonical, ogImage)
+			pageTitle = firstNonEmpty(normalizeMetaText(pageTitle, 120), "Trang web của tôi")
+			pageDescription = firstNonEmpty(
+				normalizeMetaText(pageDescription, 220),
+				normalizeMetaText(pageKeywords, 220),
+				normalizeMetaText(pageTitle, 220),
+				"Nội dung đang được cập nhật.",
+			)
+			pageKeywords = firstNonEmpty(normalizeMetaText(pageKeywords, 255), pageDescription)
 			initialData["pageTitle"] = pageTitle
 			initialData["pageDescription"] = pageDescription
 			initialData["pageKeywords"] = pageKeywords
@@ -699,6 +734,7 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 				normalizedPath, domain, route.AppID, route.TblServiceDetail)
 		}
 	}
+	allowVisibleBody = allowVisibleBody && hasVisibleSEOContent(initialData)
 	markStage("listing")
 
 	appConfig := map[string]any{"f_logo": route.FLogo, "f_title": pageTitle}
@@ -718,6 +754,29 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 	resourceHints := buildSSRResourceHints(ogImage, route.GTag)
 	headHints := preload + resourceHints
 	pageType := resolveSSRPageType(initialData)
+	preCtx := &preprocessCtx{
+		Title:           pageTitle,
+		Description:     pageDescription,
+		Keywords:        pageKeywords,
+		RobotsPolicy:    robotsPolicy,
+		Canonical:       canonical,
+		Image:           ogImage,
+		SiteName:        baseURL,
+		Logo:            routeLogo,
+		GSV:             route.GSV,
+		GTag:            route.GTag,
+		AppID:           route.AppID,
+		PageType:        pageType,
+		Author:          resolveSSRAuthor(initialData),
+		PublishedAt:     resolveSSRPublishedAt(initialData),
+		ModifiedAt:      resolveSSRModifiedAt(initialData),
+		Lang:            lang,
+		PagePath:        normalizedPath,
+		BaseURL:         baseURL,
+		DefaultCategory: defaultServiceCode,
+		InitialData:     initialData,
+		Categories:      categories,
+	}
 
 	filePath := ctx.RM.GetStaticFile(indexPath)
 	if filePath == "" && rpIndex != "" {
@@ -736,6 +795,10 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 		if err == nil {
 			lowerFilePath := strings.ToLower(filePath)
 			if strings.Contains(lowerFilePath, string(os.PathSeparator)+"frontend"+string(os.PathSeparator)+"index.html") || strings.Contains(lowerFilePath, string(os.PathSeparator)+"admin"+string(os.PathSeparator)+"index.html") {
+				visibleBodyHTML := ""
+				if allowVisibleBody {
+					visibleBodyHTML = buildSSRVisibleBodyHTML(preCtx)
+				}
 				html, tplErr := renderPublicShellTemplate(raw, publicShellData{
 					Lang:            lang,
 					BaseURL:         baseURL,
@@ -751,10 +814,15 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 					AppID:           route.AppID,
 					PageType:        pageType,
 					Preload:         template.HTML(headHints),
-					StructuredData:  template.HTML(buildStructuredDataGraph(&preprocessCtx{Title: pageTitle, Description: pageDescription, Keywords: pageKeywords, Canonical: canonical, Image: ogImage, SiteName: baseURL, Logo: routeLogo, GSV: route.GSV, GTag: route.GTag, AppID: route.AppID, PageType: pageType, Author: resolveSSRAuthor(initialData), PublishedAt: resolveSSRPublishedAt(initialData), ModifiedAt: resolveSSRModifiedAt(initialData), Lang: lang, PagePath: normalizedPath, BaseURL: baseURL, DefaultCategory: defaultServiceCode, InitialData: initialData, Categories: categories})),
+					StructuredData:  template.HTML(buildStructuredDataGraph(preCtx)),
 					InjectedScripts: template.HTML(scripts),
 				})
 				if tplErr == nil {
+					preprocessHTML(&html, preCtx)
+					applySSRRobotsPolicy(&html, robotsPolicy)
+					if allowVisibleBody {
+						injectSSRVisibleBody(&html, visibleBodyHTML)
+					}
 					markStage("template")
 					return html
 				}
@@ -762,30 +830,12 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 			}
 
 			html := raw
-			preprocessHTML(&html, &preprocessCtx{
-				Title:           pageTitle,
-				Description:     pageDescription,
-				Keywords:        pageKeywords,
-				Canonical:       canonical,
-				Image:           ogImage,
-				SiteName:        baseURL,
-				Logo:            routeLogo,
-				GSV:             route.GSV,
-				GTag:            route.GTag,
-				AppID:           route.AppID,
-				PageType:        pageType,
-				Author:          resolveSSRAuthor(initialData),
-				PublishedAt:     resolveSSRPublishedAt(initialData),
-				ModifiedAt:      resolveSSRModifiedAt(initialData),
-				Lang:            lang,
-				PagePath:        normalizedPath,
-				BaseURL:         baseURL,
-				DefaultCategory: defaultServiceCode,
-				InitialData:     initialData,
-				Categories:      categories,
-			})
+			preprocessHTML(&html, preCtx)
 			finalizeThymeleafHTML(&html, &preprocessCtx{GTag: route.GTag})
 			injectIntoHTML(&html, headHints+scripts)
+			if allowVisibleBody {
+				injectSSRVisibleBody(&html, buildSSRVisibleBodyHTML(preCtx))
+			}
 			markStage("template")
 			return html
 		}
@@ -797,6 +847,7 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 		Title:           pageTitle,
 		Description:     pageDescription,
 		Keywords:        pageKeywords,
+		RobotsPolicy:    robotsPolicy,
 		Canonical:       canonical,
 		Image:           ogImage,
 		SiteName:        baseURL,
@@ -814,7 +865,7 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 		DefaultCategory: defaultServiceCode,
 		InitialData:     initialData,
 		Categories:      categories,
-	}, uri, route.AppID, rpIndex, scripts)
+	}, uri, route.AppID, rpIndex, scripts, allowVisibleBody)
 }
 
 func isSSRStageProfileEnabled() bool {
@@ -897,18 +948,69 @@ func normalizeFCase(path string) string {
 	return fCase
 }
 
+func buildDomainCandidates(domain string) []string {
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	if domain == "" {
+		return nil
+	}
+
+	seen := map[string]struct{}{}
+	out := make([]string, 0, 3)
+	add := func(v string) {
+		v = strings.ToLower(strings.TrimSpace(v))
+		if v == "" {
+			return
+		}
+		if _, ok := seen[v]; ok {
+			return
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+
+	add(domain)
+
+	if strings.HasSuffix(domain, ".com.vn") {
+		base := strings.TrimSuffix(domain, ".com.vn")
+		if base != "" {
+			add(base + ".vn")
+		}
+	} else if strings.HasSuffix(domain, ".vn") {
+		base := strings.TrimSuffix(domain, ".vn")
+		if base != "" && !strings.HasSuffix(base, ".com") {
+			add(base + ".com.vn")
+		}
+	}
+
+	return out
+}
+
 func resolveRoute(rm *data.RecordManager, host, path string) resolvedRoute {
 	domain := DomainFromHost(host)
 	if domain == "" {
 		return resolvedRoute{}
 	}
 
-	domainCandidates := []string{domain}
+	domainCandidates := buildDomainCandidates(domain)
+	if len(domainCandidates) == 0 {
+		domainCandidates = []string{domain}
+	}
 
 	fCase := normalizeFCase(path)
 
 	// Priority 1: exact domain + f_case (Java WebSpringController / Rust resolve_route)
 	for _, candidate := range domainCandidates {
+		if fCase == "" {
+			if route, ok := queryRoute(rm, []model.SearchFilter{
+				model.EqFilter("domain_name", candidate),
+				model.EqFilter("f_case", fCase),
+				model.EqFilter("app_type", "web"),
+				model.EqFilter("run", 1),
+			}); ok {
+				route.Domain = candidate
+				return route
+			}
+		}
 		if route, ok := queryRoute(rm, []model.SearchFilter{
 			model.EqFilter("domain_name", candidate),
 			model.EqFilter("f_case", fCase),
@@ -968,40 +1070,7 @@ func queryReactCatchAllRoute(rm *data.RecordManager, domain string) (resolvedRou
 	if len(rows) == 0 {
 		return resolvedRoute{}, false
 	}
-
-	bestScore := -1
-	best := resolvedRoute{}
-
-	for _, row := range rows {
-		candidate := resolvedRouteFromRow(row)
-		score := 0
-
-		if strings.TrimSpace(candidate.RPIndex) != "" {
-			score += 10
-		}
-		if strings.EqualFold(strings.TrimSpace(candidate.AppType), "web") {
-			score += 100
-		}
-		if strings.TrimSpace(candidate.AppID) != "" {
-			score += 20
-		}
-		if strings.TrimSpace(candidate.TblServices) != "" {
-			score += 10
-		}
-		if strings.TrimSpace(candidate.TblServiceDetail) != "" {
-			score += 10
-		}
-
-		if score > bestScore {
-			bestScore = score
-			best = candidate
-		}
-	}
-
-	if bestScore < 0 {
-		return resolvedRoute{}, false
-	}
-	return best, true
+	return resolvedRouteFromRow(rows[0]), true
 }
 
 func mergeRouteForSPA(base, overlay resolvedRoute) resolvedRoute {
@@ -1104,11 +1173,7 @@ func queryRoute(rm *data.RecordManager, conditions []model.SearchFilter) (resolv
 	if len(rows) == 0 {
 		return resolvedRoute{}, false
 	}
-	best, ok := pickBestResolvedRoute(rows)
-	if !ok {
-		return resolvedRoute{}, false
-	}
-	return best, true
+	return resolvedRouteFromRow(rows[0]), true
 }
 
 func filterRouterRowsByDomainAliases(rows []map[string]any, conditions []model.SearchFilter) []map[string]any {
@@ -1795,6 +1860,7 @@ func resolveServiceListing(
 	if lang == "" {
 		lang = "vi"
 	}
+	lang = normalizeLangCode(lang)
 	lastKey := params["lastkey"]
 
 	pathNoExt := strings.ReplaceAll(path, ".shtml", "")
@@ -1807,6 +1873,21 @@ func resolveServiceListing(
 		}
 	}
 	isHome := len(segs) == 0
+	hasSingleSegmentCategory := false
+	if len(segs) == 1 && route.TblServices != "" {
+		candidate := resolveLegacyServiceCode(segs[0], mainServiceCode, defaultServiceCode)
+		catFilter := model.SearchFilter{
+			Operator: "AND",
+			Conditions: []model.SearchFilter{
+				model.EqFilter("slug", candidate),
+				model.EqFilter("status", "active"),
+				{Field: "domain", FilterType: "like", Value: domain},
+			},
+		}
+		if cat := rm.Find(route.AppID, route.TblServices, catFilter); len(cat) > 0 {
+			hasSingleSegmentCategory = true
+		}
+	}
 
 	if isHome {
 		filter := model.SearchFilter{
@@ -1863,7 +1944,7 @@ func resolveServiceListing(
 		}
 	}
 
-	if len(segs) == 1 {
+	if len(segs) == 1 && !hasSingleSegmentCategory {
 		slugOnly := segs[0]
 		row := findActiveServiceDetail(rm, route, domain, "", slugOnly)
 		if len(row) > 0 {
@@ -2012,6 +2093,17 @@ func resolveServiceListing(
 		},
 	}
 	service := rm.Find(route.AppID, route.TblServices, svcFilter)
+	if len(service) == 0 {
+		svcBySlugFilter := model.SearchFilter{
+			Operator: "AND",
+			Conditions: []model.SearchFilter{
+				model.EqFilter("slug", slug),
+				model.EqFilter("status", "active"),
+				{Field: "domain", FilterType: "like", Value: domain},
+			},
+		}
+		service = rm.Find(route.AppID, route.TblServices, svcBySlugFilter)
+	}
 
 	serviceCode := slug
 	if len(service) > 0 {
@@ -2311,24 +2403,70 @@ func insertRelated(
 	out["relatedDetailList"] = related
 }
 
+func normalizeLangCode(raw string) string {
+	lang := strings.ToLower(strings.TrimSpace(raw))
+	lang = strings.ReplaceAll(lang, "_", "-")
+	switch lang {
+	case "en", "zh", "vi":
+		return lang
+	case "en-us", "en-gb", "en-au", "en-ca", "en-sg":
+		return "en"
+	case "zh-cn", "zh-hans", "zh-sg":
+		return "zh"
+	case "zh-tw", "zh-hk", "zh-hant":
+		return "zh"
+	case "vi-vn":
+		return "vi"
+	default:
+		return "vi"
+	}
+}
+
+func localizedFieldValue(row map[string]any, base, lang string) string {
+	lang = normalizeLangCode(lang)
+	if lang != "vi" {
+		if localized := recordStr(row, base+"_"+lang); localized != "" {
+			return localized
+		}
+	}
+	return recordStr(row, base)
+}
+
+func localizedWebContent(rm *data.RecordManager, row map[string]any, base, lang string) string {
+	return decryptWebContent(rm, localizedFieldValue(row, base, lang))
+}
+
+func applySpecialPageHint(initialData map[string]any) {
+	if initialData == nil {
+		return
+	}
+	hasSpecial := false
+	if detail, ok := initialData["serviceDetail"].(map[string]any); ok {
+		hasSpecial = recordBool(detail, "is_special_page") || recordBool(detail, "special_page")
+	}
+	if !hasSpecial {
+		if category, ok := initialData["serviceCategory"].(map[string]any); ok {
+			hasSpecial = recordBool(category, "is_special_page") || recordBool(category, "special_page")
+		}
+	}
+	if hasSpecial {
+		initialData["isSpecialPage"] = true
+	} else {
+		delete(initialData, "isSpecialPage")
+	}
+}
+
 func mapDetailLite(rm *data.RecordManager, row map[string]any, lang string) map[string]any {
 	s := func(k string) string { return recordStr(row, k) }
-	langS := func(base string) string {
-		if lang != "vi" {
-			if v := s(base + "_" + lang); v != "" {
-				return v
-			}
-		}
-		return s(base)
-	}
+	lang = normalizeLangCode(lang)
 
 	m := map[string]any{
 		"id":               s("id"),
 		"domain":           s("domain"),
 		"service_type":     s("service_type"),
-		"title":            decryptWebContent(rm, langS("title")),
+		"title":            localizedWebContent(rm, row, "title", lang),
 		"slug":             s("slug"),
-		"excerpt":          decryptWebContent(rm, langS("excerpt")),
+		"excerpt":          localizedWebContent(rm, row, "excerpt", lang),
 		"thumbnail":        s("thumbnail"),
 		"cover":            s("cover"),
 		"images":           s("images"),
@@ -2337,7 +2475,7 @@ func mapDetailLite(rm *data.RecordManager, row map[string]any, lang string) map[
 		"video":            s("video"),
 		"video_url":        s("video_url"),
 		"tags":             s("tags"),
-		"keywords":         langS("keywords"),
+		"keywords":         localizedFieldValue(row, "keywords", lang),
 		"meta_description": s("meta_description"),
 		"featured":         recordBool(row, "featured"),
 		"activeHome":       recordBool(row, "active_home"),
@@ -2361,15 +2499,8 @@ func mapDetailLite(rm *data.RecordManager, row map[string]any, lang string) map[
 func mapDetailFullObj(rm *data.RecordManager, row map[string]any, lang string) map[string]any {
 	m := mapDetailLite(rm, row, lang)
 	s := func(k string) string { return recordStr(row, k) }
-	langS := func(base string) string {
-		if lang != "vi" {
-			if v := s(base + "_" + lang); v != "" {
-				return v
-			}
-		}
-		return s(base)
-	}
-	m["content"] = decryptWebContent(rm, langS("content"))
+	lang = normalizeLangCode(lang)
+	m["content"] = localizedWebContent(rm, row, "content", lang)
 	m["seo_meta"] = s("seo_meta")
 	m["dien_thoai"] = s("dien_thoai")
 	delete(m, "attributes")
@@ -2379,14 +2510,7 @@ func mapDetailFullObj(rm *data.RecordManager, row map[string]any, lang string) m
 
 func mapServiceCategory(rm *data.RecordManager, row map[string]any, lang string) map[string]any {
 	s := func(k string) string { return recordStr(row, k) }
-	langS := func(base string) string {
-		if lang != "vi" {
-			if v := s(base + "_" + lang); v != "" {
-				return v
-			}
-		}
-		return s(base)
-	}
+	lang = normalizeLangCode(lang)
 	m := map[string]any{
 		"id":           s("id"),
 		"domain":       s("domain"),
@@ -2398,10 +2522,10 @@ func mapServiceCategory(rm *data.RecordManager, row map[string]any, lang string)
 		"sort_order":   s("sort_order"),
 		"seo_meta":     s("seo_meta"),
 		"parent_id":    s("parent_id"),
-		"content":      decryptWebContent(rm, langS("content")),
-		"description":  decryptWebContent(rm, langS("description")),
-		"category":     langS("category"),
-		"title":        langS("title"),
+		"content":      localizedWebContent(rm, row, "content", lang),
+		"description":  localizedWebContent(rm, row, "description", lang),
+		"category":     localizedFieldValue(row, "category", lang),
+		"title":        localizedFieldValue(row, "title", lang),
 	}
 	if v, ok := row["attributes"]; ok {
 		m["attributes"] = v
@@ -2581,6 +2705,119 @@ func buildJSONLD(ctx *preprocessCtx) string {
 	return string(raw)
 }
 
+func buildSSRVisibleBodyHTML(ctx *preprocessCtx) string {
+	if ctx == nil {
+		return ""
+	}
+
+	title := strings.TrimSpace(ctx.Title)
+	description := strings.TrimSpace(ctx.Description)
+	bodyHTML := ""
+
+	if detail, ok := ctx.InitialData["serviceDetail"].(map[string]any); ok && len(detail) > 0 {
+		bodyHTML = firstNonEmpty(
+			recordStr(detail, "content"),
+			recordStr(detail, "pageContent"),
+			recordStr(ctx.InitialData, "pageContent"),
+		)
+	}
+	if bodyHTML == "" {
+		if cat, ok := ctx.InitialData["serviceCategory"].(map[string]any); ok && len(cat) > 0 {
+			bodyHTML = firstNonEmpty(
+				recordStr(cat, "content"),
+				recordStr(cat, "pageContent"),
+				recordStr(ctx.InitialData, "pageContent"),
+			)
+		}
+	}
+	if bodyHTML == "" {
+		bodyHTML = recordStr(ctx.InitialData, "pageContent")
+	}
+	bodyHTML = strings.TrimSpace(stripBetween(stripBetween(bodyHTML, "<script", "</script>"), "<style", "</style>"))
+	bodyText := normalizeMetaText(stripHTMLToText(bodyHTML, 5000), 5000)
+	if bodyText == "" {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString(`<main id="ssr-content" class="ssr-content" aria-label="Nội dung chính">`)
+	if title != "" {
+		b.WriteString(`<header class="ssr-content__header"><h1 class="ssr-content__title">`)
+		b.WriteString(htmlEsc(title))
+		b.WriteString(`</h1>`)
+		if description != "" {
+			b.WriteString(`<p class="ssr-content__description">`)
+			b.WriteString(htmlEsc(description))
+			b.WriteString(`</p>`)
+		}
+		b.WriteString(`</header>`)
+	}
+	if bodyText != "" {
+		b.WriteString(`<article class="ssr-content__body">`)
+		b.WriteString(`<p>`)
+		b.WriteString(htmlEsc(bodyText))
+		b.WriteString(`</p>`)
+		b.WriteString(`</article>`)
+	}
+	b.WriteString(`</main>`)
+	return b.String()
+}
+
+func hasVisibleSEOContent(initialData map[string]any) bool {
+	if len(initialData) == 0 {
+		return false
+	}
+
+	if detail, ok := initialData["serviceDetail"].(map[string]any); ok && len(detail) > 0 {
+		return true
+	}
+	if category, ok := initialData["serviceCategory"].(map[string]any); ok && len(category) > 0 {
+		return true
+	}
+	if list, ok := initialData["serviceDetailList"].([]any); ok && len(list) > 0 {
+		return true
+	}
+	if list, ok := initialData["homeDetailList"].([]any); ok && len(list) > 0 {
+		return true
+	}
+	if content := strings.TrimSpace(recordStr(initialData, "pageContent")); content != "" {
+		return true
+	}
+
+	return false
+}
+
+func injectSSRVisibleBody(html *string, bodyHTML string) {
+	bodyHTML = strings.TrimSpace(bodyHTML)
+	if bodyHTML == "" || html == nil {
+		return
+	}
+
+	if strings.Contains(*html, "<!-- SSR_CONTENT_ANCHOR -->") {
+		*html = strings.Replace(*html, "<!-- SSR_CONTENT_ANCHOR -->", bodyHTML, 1)
+		return
+	}
+
+	lower := strings.ToLower(*html)
+	if rootPos := strings.Index(lower, `<div id="root"`); rootPos >= 0 {
+		*html = (*html)[:rootPos] + bodyHTML + "\n" + (*html)[rootPos:]
+		return
+	}
+
+	if pos := strings.Index(lower, "<body"); pos >= 0 {
+		if endRel := strings.Index((*html)[pos:], ">"); endRel >= 0 {
+			tagEnd := pos + endRel + 1
+			*html = (*html)[:tagEnd] + "\n" + bodyHTML + "\n" + (*html)[tagEnd:]
+			return
+		}
+	}
+	if pos := strings.Index(lower, "</body>"); pos >= 0 {
+		*html = (*html)[:pos] + bodyHTML + "\n" + (*html)[pos:]
+		return
+	}
+	*html += bodyHTML
+}
+
 func replaceScriptBlock(html *string, marker, newContent string) {
 	lower := strings.ToLower(*html)
 	pos := strings.Index(lower, marker)
@@ -2607,6 +2844,10 @@ func preprocessHTML(html *string, ctx *preprocessCtx) {
 	title := ctx.Title
 	description := ctx.Description
 	keywords := ctx.Keywords
+	robotsPolicy := strings.TrimSpace(ctx.RobotsPolicy)
+	if robotsPolicy == "" {
+		robotsPolicy = "index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1"
+	}
 	canonical := ctx.Canonical
 	image := ctx.Image
 	siteName := ctx.SiteName
@@ -2629,8 +2870,8 @@ func preprocessHTML(html *string, ctx *preprocessCtx) {
 	replaceMetaContent(html, "keywords", keywords)
 	replaceMetaContent(html, "google-site-verification", ctx.GSV)
 	replaceMetaContent(html, "twitter:card", twitterCard)
-	replaceMetaContent(html, "robots", "index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1")
-	injectMetaName(html, "robots", "index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1")
+	ensureMetaNameContent(html, "robots", robotsPolicy)
+	ensureMetaNameContent(html, "googlebot", robotsPolicy)
 
 	replaceOGContent(html, "og:url", canonical)
 	replaceOGContent(html, "og:site_name", siteName)
@@ -2707,6 +2948,24 @@ func preprocessHTML(html *string, ctx *preprocessCtx) {
 	for _, attr := range []string{"th:name", "th:attr", "th:inline", "th:src", "th:content", "th:href", "th:text"} {
 		stripThAttrs(html, attr)
 	}
+}
+
+func ensureMetaNameContent(html *string, name, content string) {
+	needle := `name="` + strings.ToLower(strings.TrimSpace(name)) + `"`
+	if strings.Contains(strings.ToLower(*html), needle) {
+		replaceMetaContent(html, name, content)
+		return
+	}
+	injectMetaName(html, name, content)
+}
+
+func applySSRRobotsPolicy(html *string, robotsPolicy string) {
+	robotsPolicy = strings.TrimSpace(robotsPolicy)
+	if robotsPolicy == "" {
+		return
+	}
+	ensureMetaNameContent(html, "robots", robotsPolicy)
+	ensureMetaNameContent(html, "googlebot", robotsPolicy)
 }
 
 func buildScripts(appConfig, initialData map[string]any, categories any, ssrRoutes, dynamicTemplates, meta map[string]any, defaultServiceCode string) string {
@@ -2882,7 +3141,7 @@ func extractHostFromAbsoluteURL(raw string) string {
 	return strings.ToLower(raw)
 }
 
-func fallbackHTML(ctx *preprocessCtx, uri, appID, rpIndex, scripts string) string {
+func fallbackHTML(ctx *preprocessCtx, uri, appID, rpIndex, scripts string, includeVisibleBody bool) string {
 	_ = uri
 	title := ""
 	description := ""
@@ -2895,6 +3154,9 @@ func fallbackHTML(ctx *preprocessCtx, uri, appID, rpIndex, scripts string) strin
 	articleMeta := ""
 	robots := "index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1"
 	if ctx != nil {
+		if strings.TrimSpace(ctx.RobotsPolicy) != "" {
+			robots = strings.TrimSpace(ctx.RobotsPolicy)
+		}
 		title = ctx.Title
 		description = ctx.Description
 		keywords = ctx.Keywords
@@ -2923,7 +3185,11 @@ func fallbackHTML(ctx *preprocessCtx, uri, appID, rpIndex, scripts string) strin
 	if rpIndex = strings.Trim(strings.TrimSpace(rpIndex), "/"); rpIndex != "" {
 		moduleSrc = "/" + rpIndex + "/assets/main.js"
 	}
-	return fmt.Sprintf(`<!DOCTYPE html>
+	bodyHTML := ""
+	if includeVisibleBody {
+		bodyHTML = buildSSRVisibleBodyHTML(ctx)
+	}
+	html := fmt.Sprintf(`<!DOCTYPE html>
 <html lang="%s">
 <head>
   <meta charset="utf-8"/>
@@ -2977,4 +3243,8 @@ func fallbackHTML(ctx *preprocessCtx, uri, appID, rpIndex, scripts string) strin
 		htmlEsc(appID),
 		htmlEsc(moduleSrc),
 	)
+	if includeVisibleBody {
+		injectSSRVisibleBody(&html, bodyHTML)
+	}
+	return html
 }

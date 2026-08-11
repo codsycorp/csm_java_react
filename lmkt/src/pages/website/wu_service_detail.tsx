@@ -8,27 +8,62 @@ import { useSocket } from '#src/hooks/useSocket';
 import { useUserStore } from '#src/store/user';
 import { useAppStore } from '#src/store/app';
 import { useGuestPhone } from '#src/hooks/useGuestPhone';
+
+const resolveSupportedLang = (raw?: string | null): 'vi' | 'en' | 'zh' => {
+  const norm = String(raw || '').trim().toLowerCase();
+  if (norm.startsWith('en')) return 'en';
+  if (norm.startsWith('zh')) return 'zh';
+  return 'vi';
+};
+
+const resolveLangFromPathname = (pathname: string): 'vi' | 'en' | 'zh' => {
+  const first = String(pathname || '').trim().split('/').filter(Boolean)[0] || '';
+  return resolveSupportedLang(first);
+};
+
+const localizePath = (path: string, rawLang?: string | null): string => {
+  const lang = resolveSupportedLang(rawLang);
+  const normalized = (path.startsWith('/') ? path : `/${path}`).replace(/\/+/g, '/');
+  const withoutLangPrefix = normalized.replace(/^\/(vi|en|zh)(?=\/|$)/i, '') || '/';
+  const basePath = withoutLangPrefix.startsWith('/') ? withoutLangPrefix : `/${withoutLangPrefix}`;
+  if (lang === 'vi') return basePath;
+  if (basePath === '/') return `/${lang}`;
+  return `/${lang}${basePath}`;
+};
+
+const normalizeWebsitePath = (path?: string): string => {
+  const normalized = String(path || '/').split('?')[0].replace(/\/+$/g, '') || '/';
+  const stripped = normalized.replace(/^\/(vi|en|zh)(?=\/|$)/i, '') || '/';
+  return stripped.startsWith('/') ? stripped : `/${stripped}`;
+};
+
+const isSameSSRPagePath = (a?: string, b?: string): boolean => {
+  return normalizeWebsitePath(a) === normalizeWebsitePath(b);
+};
+
 // Hook đổi ngôn ngữ theo ?hl= trên URL
 function useLanguageFromQuery() {
   const location = useLocation();
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const hl = params.get("hl");
-    if (hl === "en" || hl === "vi") {
-      i18n.changeLanguage(hl);
-      // Chỉ xóa ?hl nếu là tiếng Việt để giữ URL sạch, các ngôn ngữ khác giữ nguyên
-      if (hl === "vi") {
-        const url = new URL(window.location.href);
-        params.delete("hl");
-        url.search = params.toString();
-        window.history.replaceState({}, '', url.pathname + url.search + url.hash);
-      }
-    } else if (!i18n.language || i18n.language === "" || i18n.language === "cimode") {
-      i18n.changeLanguage("vi");
+    const langFromPath = resolveLangFromPathname(location.pathname);
+    const targetLang = hl ? resolveSupportedLang(hl) : langFromPath;
+    if (hl === 'vi' || hl === 'en' || hl === 'zh') {
+      const url = new URL(window.location.href);
+      params.delete('hl');
+      const cleanQuery = params.toString();
+      const targetPath = localizePath(location.pathname, targetLang);
+      const targetUrl = `${targetPath}${cleanQuery ? `?${cleanQuery}` : ''}${url.hash}`;
+      window.location.replace(targetUrl);
+      return;
     }
-  }, [location.search]);
+    if (i18n.language !== targetLang) {
+      i18n.changeLanguage(targetLang);
+    }
+  }, [location.pathname, location.search]);
 }
-import { useParams, useNavigate } from 'react-router';
+import { useParams } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import {
   Row,
@@ -195,10 +230,8 @@ const decodeHtml = (html?: string): string | undefined => {
   if (html.includes('%')) {
     try {
       const decoded = decodeURIComponent(html);
-      console.log('✅ URL-decode success, returning decoded HTML');
       return decoded;
-    } catch (e) {
-      console.warn('⚠️ URL-decode failed:', e);
+    } catch {
       // If decodeURIComponent fails, return as-is
       return html;
     }
@@ -210,30 +243,53 @@ const decodeHtml = (html?: string): string | undefined => {
   
   if (hasHtmlTags || hasVietnamese) {
     // Chắc chắn là plain text/HTML, KHÔNG phải encrypted
-    console.log('✅ Input is plain HTML or Vietnamese text, using as-is');
     return html;
   }
   
   // Thử decrypt (cho dữ liệu MỚI - encrypted)
   try {
     const decrypted = csmDecrypt(html);
-    console.log('✅ csmDecrypt returned result');
     // Kiểm tra nếu decrypt thành công: chứa HTML tags hợp lệ
     if (decrypted && typeof decrypted === 'string' && decrypted.length > 0) {
       // Nếu chứa HTML tag thì OK
       if (/<[a-z][\s\S]*>/i.test(decrypted)) {
-        console.log('✅ Using decrypted result (contains valid HTML)');
         return decrypted;
       }
-      console.warn('⚠️ Decrypt result doesn\'t contain HTML tags, likely corrupted');
     }
-  } catch (e) {
-    console.warn('❌ csmDecrypt failed:', (e as any).message);
+  } catch {
   }
   
   // Fallback: return nguyên bản
-  console.log('🔙 Using original input');
   return html;
+};
+
+const sanitizeHtmlForRender = (html?: string): string => {
+  if (!html) return '';
+  if (typeof window === 'undefined' || typeof DOMParser === 'undefined') return html;
+
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    doc.querySelectorAll('script,iframe,object,embed,link[rel="import"]').forEach((node) => node.remove());
+
+    doc.body.querySelectorAll('*').forEach((el) => {
+      Array.from(el.attributes).forEach((attr) => {
+        const name = attr.name.toLowerCase();
+        const value = String(attr.value || '').trim().toLowerCase();
+        if (name.startsWith('on')) {
+          el.removeAttribute(attr.name);
+          return;
+        }
+        if ((name === 'href' || name === 'src') && value.startsWith('javascript:')) {
+          el.removeAttribute(attr.name);
+        }
+      });
+    });
+
+    return doc.body.innerHTML;
+  } catch {
+    return html;
+  }
 };
 
 // Helper function to normalize image URL (fix old /images.shtml format)
@@ -249,7 +305,6 @@ const normalizeImageUrl = (url?: string): string | undefined => {
         return namePath.startsWith('/') ? namePath : `/${namePath}`;
       }
     } catch (e) {
-      console.error(`Failed to parse URL:`, url, e);
     }
   }
   
@@ -637,7 +692,7 @@ function useServiceDetailAndRelated(category: string | undefined, id: string | u
       const w: any = (typeof window !== 'undefined') ? window : undefined;
       const initial = w && (w.__INITIAL_REACT_DATA__ || w.initialReactData);
       
-      if (initial && initial.currentPagePath === (w?.location?.pathname || '')) {
+      if (initial && isSameSSRPagePath(initial.currentPagePath, w?.location?.pathname || '')) {
         
         // 1a. Main detail post from SSR (new structure)
         if (initial.serviceDetail) {
@@ -700,7 +755,6 @@ function useServiceDetailAndRelated(category: string | undefined, id: string | u
         }
       }
     } catch (e) {
-      console.warn('⚠️ Error loading SSR data:', e);
     }
     
     // 2. If SSR provided complete data, finish early
@@ -922,7 +976,7 @@ const GenericDetail = ({ post, t }: { post: ServicePost, t: any }) => {
               postContent 
                 ? React.createElement('div', { 
                     style: { color: 'var(--text-primary)', lineHeight: 1.8 }, 
-                    dangerouslySetInnerHTML: { __html: decodeHtml(postContent) }, 
+                    dangerouslySetInnerHTML: { __html: sanitizeHtmlForRender(decodeHtml(postContent) || '') }, 
                     key: 'desc-html' 
                   })
                 : React.createElement(Paragraph, { 
@@ -1057,7 +1111,7 @@ const RealEstateDetail = ({ post, t }: { post: ServicePost, t: any }) => {
   };
 
   const htmlBlock = postContent
-    ? React.createElement('div', { key: 'html-block', style: { color: 'var(--text-primary)', lineHeight: 1.7 }, dangerouslySetInnerHTML: { __html: decodeHtml(postContent) } })
+    ? React.createElement('div', { key: 'html-block', style: { color: 'var(--text-primary)', lineHeight: 1.7 }, dangerouslySetInnerHTML: { __html: sanitizeHtmlForRender(decodeHtml(postContent) || '') } })
     : React.createElement(Paragraph, { key: 'no-desc', style: { color: 'var(--text-secondary)' } }, t('website.services.detail.no_description', 'Chưa có mô tả chi tiết.'));
   
   return React.createElement(
@@ -1477,7 +1531,7 @@ const BookingDetail = ({ post, t }: { post: ServicePost, t: any }) => {
     React.createElement(Divider, null),
     React.createElement(Title, { level: 4, style: { color: 'var(--text-primary)' }, key: 'desc-title' }, t('website.services.detail.description', 'Mô tả dịch vụ')),
     (postContent
-      ? React.createElement('div', { key: 'desc-content', style: { color: 'var(--text-primary)', lineHeight: 1.7 }, dangerouslySetInnerHTML: { __html: decodeHtml(postContent) } })
+      ? React.createElement('div', { key: 'desc-content', style: { color: 'var(--text-primary)', lineHeight: 1.7 }, dangerouslySetInnerHTML: { __html: sanitizeHtmlForRender(decodeHtml(postContent) || '') } })
       : React.createElement(Paragraph, { key: 'desc-content', style: { color: 'var(--text-secondary)' } }, t('website.services.detail.no_description', 'Chưa có mô tả chi tiết.'))),
     React.createElement(Modal, {
       open: modalOpen,
@@ -1561,7 +1615,6 @@ export default function WuServiceDetail() {
     id = cleanSlug;
   }
   
-  const navigate = useNavigate();
   const location = useLocation();
   
   // Đọc trang từ URL query param (?page=2), mặc định là 1
@@ -1622,13 +1675,7 @@ export default function WuServiceDetail() {
 
   // SEO title/meta are set server-side; avoid client-side overrides for SEO stability
 
-  // Build ?hl=xx only khi ngôn ngữ không phải tiếng Việt
-  const langSuffix = (() => {
-    const lang = i18n.language || '';
-    const short = lang.slice(0, 2).toLowerCase();
-    if (short === 'vi' || lang === 'cimode') return '';
-    return short ? `?hl=${short}` : '';
-  })();
+  const currentLangCode = resolveSupportedLang(i18n.language || resolveLangFromPathname(location.pathname));
 
   // Professional, always-visible breadcrumb for clear navigation
   const renderBreadcrumb = () => {
@@ -1867,7 +1914,7 @@ export default function WuServiceDetail() {
                         || '';
                       const relVideo = relVideos[0];
                       const relServiceType = rel.serviceType || rel.category || post?.serviceType || 'bat-dong-san';
-                      const relHref = `/${relServiceType}/${rel.slug}${langSuffix}`;
+                      const relHref = localizePath(`/${relServiceType}/${rel.slug}`, currentLangCode);
                       return (
                       <Col xs={24} sm={12} md={12} lg={6} key={rel.id}>
                         <Card
@@ -1895,6 +1942,10 @@ export default function WuServiceDetail() {
                                   src={relThumb}
                                   alt={relTitle}
                                   loading="lazy"
+                                  decoding="async"
+                                  fetchPriority="low"
+                                  width={640}
+                                  height={360}
                                   onError={(e) => { (e.currentTarget as HTMLImageElement).src = svgPlaceholder(relTitle || 'CSM', 640, 360); }}
                                   style={{ 
                                     position: 'absolute', 
@@ -1926,6 +1977,10 @@ export default function WuServiceDetail() {
                                   src={svgPlaceholder(relTitle || 'CSM', 640, 360)}
                                   alt={relTitle}
                                   loading="lazy"
+                                  decoding="async"
+                                  fetchPriority="low"
+                                  width={640}
+                                  height={360}
                                   style={{ 
                                     position: 'absolute', 
                                     inset: 0, 

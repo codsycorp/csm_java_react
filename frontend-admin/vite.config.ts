@@ -123,37 +123,7 @@ export default defineVitestConfig(({ mode }) => {
 			assetFileNames: "admin/assets/[name].[hash].[ext]",
 			chunkFileNames: "admin/assets/[name].[hash].js",
 			entryFileNames: "admin/assets/[name].[hash].js",
-			// Split heavy vendor modules to keep first-paint bundle lean for SSR pages.
-			manualChunks: (id) => {
-				if (!id.includes("node_modules")) return;
-
-				if (id.includes("node_modules/react") ||
-					id.includes("node_modules/react-dom") ||
-					id.includes("node_modules/antd") ||
-					id.includes("node_modules/@ant-design")) {
-					return "ui-core";
-				}
-				if (id.includes("node_modules/@codemirror") ||
-					id.includes("node_modules/@uiw/react-codemirror") ||
-					id.includes("node_modules/react-quill") ||
-					id.includes("node_modules/quill")) {
-					return "editor";
-				}
-				if (id.includes("node_modules/echarts") ||
-					id.includes("node_modules/echarts-for-react")) {
-					return "charts";
-				}
-				if (id.includes("node_modules/docxtemplater") ||
-					id.includes("node_modules/jszip") ||
-					id.includes("node_modules/xlsx") ||
-					id.includes("node_modules/pdfjs-dist") ||
-					id.includes("node_modules/html2pdf.js")) {
-					return "office";
-				}
-				if (id.includes("node_modules/@fullcalendar")) {
-					return "calendar";
-				}
-			},
+			// Keep Rollup default chunk graph to avoid vendor circular-chunk runtime issues.
 		  },
 		  external: [],
 		},

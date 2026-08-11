@@ -326,6 +326,14 @@ func (h *TableHandler) handleUpdateOperation(out map[string]any, params map[stri
 		}
 	}
 
+	if command == "create" && (table == "csm_accounts" || table == "csm_group_members") {
+		if _, msg := security.ValidateRequiredAccountExpiryOnCreate(objUpdate, objUpdate); msg != "" {
+			out["success"] = false
+			out["message"] = msg
+			return out
+		}
+	}
+
 	objUpdate, pwErr := h.handlePasswordChange(appID, table, objUpdate, filter)
 	if pwErr != "" {
 		out["success"] = false
@@ -451,6 +459,7 @@ func (h *TableHandler) handleUpdateOperation(out map[string]any, params map[stri
 		return out
 	}
 	if table == "csm_accounts" || table == "csm_group_members" {
+		security.ApplyAccountExpiryFromInput(finalObj, finalObj)
 		h.ensurePassEncrypted(table, finalObj, existing)
 	}
 

@@ -8,7 +8,7 @@ import { logoutAndReload } from "#src/utils/app-reset";
 
 import { LogoutOutlined } from "@ant-design/icons";
 import { useKeyPress } from "ahooks";
-import { Avatar, Dropdown } from "antd";
+import { Avatar, Dropdown, Tag } from "antd";
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -16,7 +16,24 @@ export function UserMenu({ ...restProps }: ButtonProps) {
 	const { addTab, setActiveKey } = useTabsStore();
 	const { t } = useTranslation();
 	const avatar = useUserStore(state => state.avatar);
+	const accountRemainingDays = useUserStore(state => state.account_remaining_days);
+	const accountWarningLevel = useUserStore(state => state.account_expiry_warning_level);
+	const accountWarningMessage = useUserStore(state => state.account_expiry_warning_message);
 	const logout = useAuthStore(state => state.logout);
+
+	const warningTagColor = useMemo(() => {
+		switch (accountWarningLevel) {
+			case "expired":
+			case "critical":
+				return "red";
+			case "high":
+				return "orange";
+			case "medium":
+				return "gold";
+			default:
+				return "default";
+		}
+	}, [accountWarningLevel]);
 
 	const onClick: MenuProps["onClick"] = async ({ key }) => {
 		if (key === "logout") {
@@ -40,9 +57,17 @@ export function UserMenu({ ...restProps }: ButtonProps) {
 	};
 
 	const altView = useMemo(() => isWindowsOs() ? "Alt" : "⌥", [isWindowsOs]);
+	const warningItems: any[] = accountWarningMessage
+		? [{
+			label: <Tag color={warningTagColor}>{accountWarningMessage}</Tag>,
+			key: "account-expiry-warning",
+			disabled: true,
+		}]
+		: [];
 	const items: MenuProps["items"] = [
+		...warningItems,
 		{
-			label: t("common.menu.personalCenter"),
+			label: accountRemainingDays > 0 ? `${t("common.menu.personalCenter")} · ${accountRemainingDays} ngày còn lại` : t("common.menu.personalCenter"),
 			key: "personal-center",
 			icon: <UserCircleIcon />,
 			extra: `${altView}P`,

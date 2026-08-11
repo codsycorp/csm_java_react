@@ -789,6 +789,9 @@ func (s *UserService) RegisterUser(req map[string]any) RegistrationResult {
 		"permissions": []any{"admin"}, "menusPermissions": []any{"home", "profile"},
 		"source_app_token": req["app_token"],
 	}
+	if _, msg := security.ValidateRequiredAccountExpiryOnCreate(userData, req); msg != "" {
+		return RegistrationResult{ErrorCode: 4, ErrorMessage: msg}
+	}
 	for _, pk := range []string{"email", "username", "phoneNumber", "app_id", "app_token", "id"} {
 		if userData[pk] == nil {
 			userData[pk] = ""
@@ -851,6 +854,9 @@ func (s *UserService) CreateSubUser(req map[string]any, auth *security.AuthUser)
 		"email": loginID, "username": loginID,
 		"refresh": subToken, "refresh_token": subToken,
 		"login_version": 0, "loginVersion": 0,
+	}
+	if _, msg := security.ValidateRequiredAccountExpiryOnCreate(subUser, req); msg != "" {
+		return RegistrationResult{ErrorCode: 4, ErrorMessage: msg}
 	}
 	if _, err := s.rm.CreateRecord(CSMAppID, SubAccountsTable, subUser, []string{"id"}); err != nil {
 		return RegistrationResult{ErrorCode: 1, ErrorMessage: err.Error()}

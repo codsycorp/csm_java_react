@@ -17,6 +17,7 @@ type LegacySocket = {
 };
 import { useAppStore, useUserStore } from "#src/store";
 import { notifyDynamicCodeReload } from "#src/pages/system/dynamic-code/reload";
+import { forceLogoutAndReload } from "#src/utils/app-reset";
 
 interface SocketUpdateEvent {
 	appId: string; // App ID của table này thuộc về
@@ -230,6 +231,7 @@ export function useSocket(options: UseSocketOptions = {}) {
 	const [connected, setConnected] = useState(false);
 	const currentAppId = useAppStore((state) => state.currentAppId);
 	const userAppId = useUserStore((state) => state.app_id);
+	const userId = useUserStore((state) => state.userId);
 	
 	const appId = (userAppId && userAppId.trim())
 		|| (currentAppId && currentAppId.trim())
@@ -296,6 +298,9 @@ export function useSocket(options: UseSocketOptions = {}) {
 			if (isAdmin) {
 				socket.emit("join_room", "csm");
 			}
+			if (userId) {
+				socket.emit("join_room", `auth:user:${userId}`);
+			}
 		};
 
 		if (lastJoinedRoomRef.current !== appId) {
@@ -307,7 +312,25 @@ export function useSocket(options: UseSocketOptions = {}) {
 		return () => {
 			socket.off?.("connect", joinBaseRooms);
 		};
-	}, [enabled, appId, isAdmin]);
+	}, [enabled, appId, isAdmin, userId]);
+
+	useEffect(() => {
+		if (!enabled) return;
+		const socket = socketRef.current || sharedSocket;
+		if (!socket) return;
+
+		const handleForceLogout = (payload: any) => {
+			forceLogoutAndReload(
+				"session_replaced",
+				String(payload?.message || "Tài khoản đã đăng nhập ở thiết bị khác, phiên hiện tại đã bị đăng xuất."),
+			);
+		};
+
+		socket.on("force_logout", handleForceLogout);
+		return () => {
+			socket.off?.("force_logout", handleForceLogout);
+		};
+	}, [enabled]);
 
 	return {
 		socket: socketRef.current || sharedSocket,

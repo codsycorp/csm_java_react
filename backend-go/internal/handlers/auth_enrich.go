@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"time"
 
 	"csm_server/backend-go/internal/data"
 	"csm_server/backend-go/internal/model"
@@ -33,6 +34,25 @@ func userInfoMapFromUser(user *model.User) map[string]any {
 	if user.PermissionSchemaVer != nil {
 		info["permissionSchemaVersion"] = *user.PermissionSchemaVer
 	}
+	if user.AccountExpiryAt != nil {
+		expiry := *user.AccountExpiryAt
+		remainingDays := accountRemainingDays(expiry)
+		warningLevel, warningMessage := accountExpiryWarning(remainingDays)
+		info["account_expiry_at"] = expiry
+		info["accountExpiryAt"] = expiry
+		info["account_expiry_date"] = time.UnixMilli(expiry).Format("2006-01-02")
+		info["accountExpiryDate"] = time.UnixMilli(expiry).Format("2006-01-02")
+		info["account_remaining_days"] = remainingDays
+		info["accountRemainingDays"] = remainingDays
+		if warningLevel != "" {
+			info["account_expiry_warning_level"] = warningLevel
+			info["accountExpiryWarningLevel"] = warningLevel
+		}
+		if warningMessage != "" {
+			info["account_expiry_warning_message"] = warningMessage
+			info["accountExpiryWarningMessage"] = warningMessage
+		}
+	}
 	if user.DataScope != nil {
 		info["dataScope"] = *user.DataScope
 	}
@@ -58,6 +78,37 @@ func userInfoMapFromUser(user *model.User) map[string]any {
 		}
 	}
 	return info
+}
+
+func accountRemainingDays(expiryAt int64) int {
+	if expiryAt <= 0 {
+		return 0
+	}
+	remaining := time.Until(time.UnixMilli(expiryAt))
+	if remaining <= 0 {
+		return 0
+	}
+	days := int((remaining + 24*time.Hour - time.Millisecond) / (24 * time.Hour))
+	if days < 0 {
+		return 0
+	}
+	return days
+}
+
+func accountExpiryWarning(remainingDays int) (string, string) {
+	if remainingDays <= 0 {
+		return "expired", "Tài khoản đã hết hạn sử dụng"
+	}
+	if remainingDays <= 1 {
+		return "critical", "Tài khoản sẽ hết hạn trong vòng 24 giờ"
+	}
+	if remainingDays <= 3 {
+		return "high", "Tài khoản sẽ hết hạn trong 3 ngày tới"
+	}
+	if remainingDays <= 7 {
+		return "medium", "Tài khoản sẽ hết hạn trong 7 ngày tới"
+	}
+	return "", ""
 }
 
 func enrichAccountMeta(rm *data.RecordManager, user *model.User, info map[string]any) {

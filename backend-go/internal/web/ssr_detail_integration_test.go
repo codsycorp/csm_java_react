@@ -61,13 +61,19 @@ func TestBuildSSRHTML_ServiceDetailInjected(t *testing.T) {
 	host := "phanmemmottrieu.net"
 	ctx := SSRContext{RM: rm}
 
-	html := buildSSRHTML(ctx, uri, host, "")
+	html := buildSSRHTML(ctx, uri, host, "", true)
 	if !strings.Contains(html, `"serviceDetail"`) {
 		t.Fatalf("SSR HTML missing serviceDetail for %s", uri)
 	}
 	if !strings.Contains(html, `"currentPagePath":"/bat-dong-san/`+slug+`.shtml"`) &&
 		!strings.Contains(html, `"currentPagePath": "/bat-dong-san/`+slug+`.shtml"`) {
 		t.Fatalf("SSR HTML currentPagePath should keep .shtml like Java, got html snippet without expected path")
+	}
+	if !strings.Contains(html, `<main id="ssr-content"`) {
+		t.Fatalf("SSR HTML missing visible body content block for %s", uri)
+	}
+	if !strings.Contains(html, `class="ssr-content__body"`) {
+		t.Fatalf("SSR HTML missing rendered body section for %s", uri)
 	}
 	if !strings.Contains(html, slug) {
 		t.Fatalf("SSR HTML missing slug %q", slug)
@@ -83,8 +89,13 @@ func TestBuildSSRHTML_LmktServiceDetailInjected(t *testing.T) {
 	host := "h-holding.vn"
 	ctx := SSRContext{RM: rm}
 
-	html := buildSSRHTML(ctx, uri, host, "")
+	html := buildSSRHTML(ctx, uri, host, "", true)
 	if !strings.Contains(html, `"serviceDetail"`) {
 		t.Fatalf("SSR HTML missing serviceDetail for lmkt %s", uri)
+	}
+
+	htmlForUser := buildSSRHTML(ctx, uri, host, "", false)
+	if strings.Contains(htmlForUser, `<main id="ssr-content"`) {
+		t.Fatalf("SSR HTML for normal user should not inject visible body block for %s", uri)
 	}
 }

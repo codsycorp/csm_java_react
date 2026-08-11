@@ -45,6 +45,7 @@ func recordStr(row map[string]any, key string) string {
 }
 
 func recordLangStr(row map[string]any, base, lang string) string {
+	lang = normalizeLangCode(lang)
 	if lang != "vi" {
 		if localized := recordStr(row, base+"_"+lang); localized != "" {
 			return localized
@@ -530,4 +531,41 @@ func isSafeSSRCacheQuery(qs string) bool {
 		}
 	}
 	return true
+}
+
+func isTrackingQueryKey(key string) bool {
+	key = strings.ToLower(strings.TrimSpace(key))
+	switch key {
+	case "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "utm_id", "gclid", "fbclid", "msclkid", "_ga", "_gl", "mclid", "zalopay", "zaloref", "fbref", "igshid", "tiktok_id", "kwai_id", "vc_ref", "cvid", "cvid_source":
+		return true
+	default:
+		return false
+	}
+}
+
+// shouldNoIndexSSRQuery marks non-canonical query URLs as noindex,follow.
+// Safe params for indexing are language and local host hints plus known tracking params.
+func shouldNoIndexSSRQuery(params map[string]string) bool {
+	if len(params) == 0 {
+		return false
+	}
+	for k, v := range params {
+		key := strings.ToLower(strings.TrimSpace(k))
+		if key == "" {
+			continue
+		}
+		if strings.TrimSpace(v) == "" {
+			continue
+		}
+		switch key {
+		case "hl", "__host", "ssr_host":
+			continue
+		default:
+			if isTrackingQueryKey(key) {
+				continue
+			}
+			return true
+		}
+	}
+	return false
 }

@@ -14,12 +14,12 @@ import (
 )
 
 type sessionState struct {
-	appID          string
-	username       string
-	guestPhone     string
-	guestIdentity  string
-	locale         string
-	isAdmin        bool
+	appID         string
+	username      string
+	guestPhone    string
+	guestIdentity string
+	locale        string
+	isAdmin       bool
 }
 
 var (
@@ -151,6 +151,7 @@ func handleJoin(s *socketio.Socket, data map[string]any) {
 	if username == "" {
 		username = "Guest"
 	}
+	userID := firstStr(data, "userId", "user_id")
 	isAdmin, _ := data["isAdmin"].(bool)
 	guestPhone := firstStr(data, "guestPhone", "guest_phone")
 	guestSessionID := firstStr(data, "guestSessionId", "guest_session_id")
@@ -197,6 +198,12 @@ func handleJoin(s *socketio.Socket, data map[string]any) {
 	}
 	s.Join(socketio.Room(room))
 	_ = s.Emit("user_joined", map[string]any{"room": room})
+
+	if userID != "" {
+		authRoom := "auth:user:" + userID
+		s.Join(socketio.Room(authRoom))
+		_ = s.Emit("user_joined", map[string]any{"room": authRoom, "username": username})
+	}
 }
 
 func handleChat(s *socketio.Socket, deps Dependencies, data map[string]any) {
@@ -339,7 +346,7 @@ func emitGuestAiReply(s *socketio.Socket, deps Dependencies, appID string, guest
 	replyData := map[string]any{
 		"room": room, "appId": appID, "message": reply,
 		"username": "CSM AI", "isBot": true, "isAdmin": false,
-		"timestamp": time.Now().UnixMilli(),
+		"timestamp":      time.Now().UnixMilli(),
 		"guestSessionId": firstStr(guestMsg, "guestSessionId", "guest_session_id"),
 	}
 	if err := deps.Chat.SaveMessage(appID, replyData); err != nil {

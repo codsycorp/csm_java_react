@@ -22,6 +22,18 @@ func TestIsSafeSSRCacheQuery(t *testing.T) {
 	}
 }
 
+func TestShouldNoIndexSSRQuery(t *testing.T) {
+	if shouldNoIndexSSRQuery(parseQS("hl=vi&__host=localhost:3333&utm_source=google")) {
+		t.Fatal("expected locale + tracking params to remain indexable")
+	}
+	if !shouldNoIndexSSRQuery(parseQS("hl=vi&page=2")) {
+		t.Fatal("expected pagination query to be noindex")
+	}
+	if !shouldNoIndexSSRQuery(parseQS("q=can+ho")) {
+		t.Fatal("expected search query to be noindex")
+	}
+}
+
 func TestNormalizeMetaText_StripsTagsAndLimitsLength(t *testing.T) {
 	raw := "<p>  Xin chao <strong>the gioi</strong>  </p>"
 	got := normalizeMetaText(raw, 20)
@@ -158,5 +170,16 @@ func TestExtractHostFromAbsoluteURL(t *testing.T) {
 	}
 	if got := extractHostFromAbsoluteURL("/relative/path.jpg"); got != "" {
 		t.Fatalf("expected empty host for relative path, got %q", got)
+	}
+}
+
+func TestApplySSRRobotsPolicy(t *testing.T) {
+	html := `<!doctype html><html><head><meta name="robots" content="index,follow" /></head><body></body></html>`
+	applySSRRobotsPolicy(&html, "noindex,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1")
+	if !strings.Contains(html, `name="robots" content="noindex,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1"`) {
+		t.Fatalf("expected robots meta to be replaced, got: %s", html)
+	}
+	if !strings.Contains(html, `name="googlebot"`) {
+		t.Fatalf("expected googlebot meta to be injected, got: %s", html)
 	}
 }

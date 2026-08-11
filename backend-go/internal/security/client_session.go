@@ -79,7 +79,18 @@ func UserAgentFromHeaders(h http.Header) string {
 }
 
 func ClientIDFromHeaders(h http.Header) string {
-	return strings.TrimSpace(h.Get("X-Client-Id"))
+	return NormalizeClientSessionID(h.Get("X-Client-Id"))
+}
+
+func NormalizeClientSessionID(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if idx := strings.Index(raw, "|"); idx >= 0 {
+		raw = strings.TrimSpace(raw[:idx])
+	}
+	return raw
 }
 
 func RefreshTokenExpired(user model.User) bool {
@@ -97,12 +108,12 @@ func RefreshTokenExpired(user model.User) bool {
 func RefreshTokenClientMatches(user model.User, clientID string) bool {
 	saved := ""
 	if user.RefreshTokenClientID != nil {
-		saved = strings.TrimSpace(*user.RefreshTokenClientID)
+		saved = NormalizeClientSessionID(*user.RefreshTokenClientID)
 	}
 	if saved == "" {
 		return true
 	}
-	clientID = strings.TrimSpace(clientID)
+	clientID = NormalizeClientSessionID(clientID)
 	return clientID != "" && saved == clientID
 }
 
@@ -116,11 +127,17 @@ func RefreshSessionValid(user model.User, clientIP, clientUA, clientID string) b
 	if RefreshTokenExpired(user) {
 		return false
 	}
+	if AccountExpired(user) {
+		return false
+	}
 	return RefreshSessionMatches(user, clientIP, clientUA, clientID)
 }
 
 func RefreshSessionValidForMiddleware(user model.User, clientIP, clientUA, clientID string) bool {
 	if RefreshTokenExpired(user) {
+		return false
+	}
+	if AccountExpired(user) {
 		return false
 	}
 	savedIP := ""
@@ -147,6 +164,9 @@ func RefreshSessionValidForMiddleware(user model.User, clientIP, clientUA, clien
 
 func RefreshSessionValidForEndpoint(user model.User, clientIP, clientUA string) bool {
 	if RefreshTokenExpired(user) {
+		return false
+	}
+	if AccountExpired(user) {
 		return false
 	}
 	savedIP := ""

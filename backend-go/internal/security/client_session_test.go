@@ -17,7 +17,7 @@ func TestRefreshTokenExpiredZeroMeansUnset(t *testing.T) {
 func TestRefreshSessionValidForMiddlewareWithoutClientID(t *testing.T) {
 	ip := "127.0.0.1"
 	ua := "Mozilla/5.0 Test"
-	clientID := "browser|tab1"
+	clientID := "browser"
 	expiry := int64(9999999999999)
 	user := model.User{
 		RefreshTokenIP:       &ip,
@@ -33,7 +33,7 @@ func TestRefreshSessionValidForMiddlewareWithoutClientID(t *testing.T) {
 func TestRefreshSessionValidForMiddlewareRejectsWrongClientIDWhenSent(t *testing.T) {
 	ip := "127.0.0.1"
 	ua := "Mozilla/5.0 Test"
-	saved := "browser|tab1"
+	saved := "browser"
 	expiry := int64(9999999999999)
 	user := model.User{
 		RefreshTokenIP:       &ip,
@@ -41,7 +41,13 @@ func TestRefreshSessionValidForMiddlewareRejectsWrongClientIDWhenSent(t *testing
 		RefreshTokenClientID: &saved,
 		RefreshTokenExpiry:   &expiry,
 	}
-	if RefreshSessionValidForMiddleware(user, ip, ua, "browser|other") {
+	if RefreshSessionValidForMiddleware(user, ip, ua, "other-browser|tab9") {
 		t.Fatal("expected mismatch when caller sends wrong X-Client-Id")
+	}
+}
+
+func TestNormalizeClientSessionIDUsesBrowserScope(t *testing.T) {
+	if got := NormalizeClientSessionID("browser-a|tab-2"); got != "browser-a" {
+		t.Fatalf("expected browser-only client id, got %q", got)
 	}
 }

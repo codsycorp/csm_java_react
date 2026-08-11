@@ -44,16 +44,15 @@ func buildLocalizedURL(baseURL, pagePath, lang string) string {
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
-	u := base + path
 	lang = resolveLang(map[string]string{"hl": lang})
-	if lang == "" || lang == "vi" {
-		return u
+	if lang == "en" || lang == "zh" {
+		if path == "/" {
+			path = "/" + lang
+		} else {
+			path = "/" + lang + path
+		}
 	}
-	sep := "?"
-	if strings.Contains(u, "?") {
-		sep = "&"
-	}
-	return u + sep + "hl=" + url.QueryEscape(lang)
+	return base + path
 }
 
 func buildHreflangLinks(baseURL, pagePath string) []hreflangLink {

@@ -141,3 +141,62 @@ func TestResolveServiceListing_GroupSlugIncludesDefaultGroupServices(t *testing.
 		t.Fatalf("expected group page content, got %q", got)
 	}
 }
+
+func TestResolveServiceListing_SingleSegmentCategoryPrefersListing(t *testing.T) {
+	rm := testSSRRecordManager(t)
+	route := resolvedRoute{
+		AppID:            "wuweb",
+		TblServices:      "web_services",
+		TblServiceDetail: "web_service_detail",
+	}
+	appID := route.AppID
+
+	seed := func(table string, record map[string]any) {
+		t.Helper()
+		if _, err := rm.CreateRecord(appID, table, record, nil); err != nil {
+			t.Fatalf("CreateRecord %s: %v", table, err)
+		}
+	}
+
+	seed(route.TblServices, map[string]any{
+		"id":           "svc-kqxs",
+		"slug":         "thong-ke-ket-qua-xo-so",
+		"service_code": "kqxs",
+		"is_service":   true,
+		"status":       "active",
+		"domain":       "example.com",
+		"category":     "Thong ke KQXS",
+		"content":      "Noi dung landing tu category",
+	})
+
+	// This detail slug matches category slug and used to incorrectly force detail mode.
+	seed(route.TblServiceDetail, map[string]any{
+		"id":           "detail-landing",
+		"service_type": "kqxs",
+		"status":       "active",
+		"domain":       "example.com",
+		"slug":         "thong-ke-ket-qua-xo-so",
+		"title":        "Bai viet trung slug",
+		"content":      "Noi dung bai viet",
+	})
+	seed(route.TblServiceDetail, map[string]any{
+		"id":           "detail-2",
+		"service_type": "kqxs",
+		"status":       "active",
+		"domain":       "example.com",
+		"slug":         "bai-viet-kqxs-2",
+		"title":        "Bai viet 2",
+	})
+
+	listing := resolveServiceListing(rm, route, "example.com", "/thong-ke-ket-qua-xo-so.shtml", nil, "", "")
+	if _, ok := listing["serviceDetail"]; ok {
+		t.Fatalf("expected listing mode for category slug, got serviceDetail payload: %v", listing["serviceDetail"])
+	}
+	details, _ := listing["serviceDetailList"].([]any)
+	if len(details) == 0 {
+		t.Fatalf("expected listing data for category slug, got none: %v", listing)
+	}
+	if got := recordStr(listing, "pageContent"); got != "Noi dung landing tu category" {
+		t.Fatalf("expected category landing content, got %q", got)
+	}
+}
