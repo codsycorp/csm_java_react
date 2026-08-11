@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveRouteCategoryKey, resolveCategoryMeta } from './seoRouteData';
+import { getLocalizedObjField, resolveRouteCategoryKey, resolveCategoryMeta } from './seoRouteData';
 
 describe('seoRouteData', () => {
   it('prefers the exact backend category for a route slug', () => {
@@ -37,5 +37,24 @@ describe('seoRouteData', () => {
       title: 'Thống Kê Kết Quả Xổ Số',
       description: 'Dữ liệu từ backend',
     });
+  });
+
+  it('reads localized backend serviceCategory content for each language', () => {
+    const category = {
+      category: 'Thống Kê Kết Quả Xổ Số',
+      category_en: 'Lottery Statistics',
+      category_zh: '彩票统计',
+      description: 'Mô tả tiếng Việt',
+      description_en: 'English description',
+      description_zh: '中文说明',
+      content: '<p>vi</p>',
+      content_en: '<p>en</p>',
+      content_zh: '<p>zh</p>',
+    };
+
+    expect(getLocalizedObjField(category, 'category', 'en')).toBe('Lottery Statistics');
+    expect(getLocalizedObjField(category, 'description', 'zh')).toBe('中文说明');
+    expect(getLocalizedObjField(category, 'content', 'en')).toBe('<p>en</p>');
+    expect(getLocalizedObjField(category, 'content', 'zh')).toBe('<p>zh</p>');
   });
 });

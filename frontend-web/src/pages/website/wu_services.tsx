@@ -46,6 +46,7 @@ import {
 import WebsiteLayout from "#src/layout/website/WebsiteLayout";
 import { useWebsiteMenu } from "#src/layout/website/wu_menu";
 import {
+  getLocalizedObjField,
   normalizeSeoRouteKey,
   resolveCategoryMeta,
   resolveRouteCategoryKey,
@@ -1144,50 +1145,17 @@ const WuServicesPage: React.FC = () => {
   const allCategories: ServiceCategory[] = useMemo(() => {
     const currentLang = i18n.language || 'vi-VN';
     return validCategories.map(cat => {
-      // Select title based on current language
-      let categoryTitle = '';
-      if (currentLang.includes('en')) {
-        categoryTitle = (cat as any).category_en && (cat as any).category_en.trim()
-          ? (cat as any).category_en
-          : (typeof cat !== 'string' ? cat.category : '');
-      } else if (currentLang.includes('zh')) {
-        categoryTitle = (cat as any).category_zh && (cat as any).category_zh.trim()
-          ? (cat as any).category_zh
-          : (typeof cat !== 'string' ? cat.category : '');
-      } else {
-        // Default to Vietnamese
-        categoryTitle = typeof cat !== 'string' ? cat.category : '';
-      }
-      
-      // Select description based on current language
-      let categoryDescription = '';
-      if (currentLang.includes('en')) {
-        categoryDescription = (cat as any).description_en && (cat as any).description_en.trim()
-          ? (cat as any).description_en
-          : (typeof cat !== 'string' ? cat.description : '');
-      } else if (currentLang.includes('zh')) {
-        categoryDescription = (cat as any).description_zh && (cat as any).description_zh.trim()
-          ? (cat as any).description_zh
-          : (typeof cat !== 'string' ? cat.description : '');
-      } else {
-        // Default to Vietnamese
-        categoryDescription = typeof cat !== 'string' ? cat.description : '';
-      }
-      // Prefer language-specific content when available; fallback to base content.
-      let content = '';
-      if (typeof cat !== 'string') {
-        if (currentLang.includes('en')) {
-          content = ((cat as any).content_en && String((cat as any).content_en).trim())
-            ? (cat as any).content_en
-            : ((cat as any).content || '');
-        } else if (currentLang.includes('zh')) {
-          content = ((cat as any).content_zh && String((cat as any).content_zh).trim())
-            ? (cat as any).content_zh
-            : ((cat as any).content || '');
-        } else {
-          content = (cat as any).content || '';
-        }
-      }
+      const categoryTitle = typeof cat !== 'string'
+        ? getLocalizedObjField(cat as Record<string, any>, 'category', currentLang)
+        : '';
+
+      const categoryDescription = typeof cat !== 'string'
+        ? getLocalizedObjField(cat as Record<string, any>, 'description', currentLang)
+        : '';
+
+      const content = typeof cat !== 'string'
+        ? getLocalizedObjField(cat as Record<string, any>, 'content', currentLang)
+        : '';
       return {
         key: typeof cat !== 'string' ? cat.slug : '',
         title: categoryTitle,
@@ -1214,42 +1182,11 @@ const WuServicesPage: React.FC = () => {
           ? (iconMap[iconVal] || (/^https?:\/\//.test(iconVal) || iconVal.startsWith('/') ? <img alt="" src={iconVal} style={{ width: 24, height: 24 }} /> : <CodeOutlined />))
           : <CodeOutlined />;
         
-        // Extract language-specific title and description
-        let title = '';
-        let description = '';
-        
-        if (currentLang.includes('en')) {
-          title = (ssrServiceCategory as any).category_en && (ssrServiceCategory as any).category_en.trim()
-            ? (ssrServiceCategory as any).category_en
-            : (ssrServiceCategory.category || ssrServiceCategory.title || '');
-          description = (ssrServiceCategory as any).description_en && (ssrServiceCategory as any).description_en.trim()
-            ? (ssrServiceCategory as any).description_en
-            : (ssrServiceCategory.description || '');
-        } else if (currentLang.includes('zh')) {
-          title = (ssrServiceCategory as any).category_zh && (ssrServiceCategory as any).category_zh.trim()
-            ? (ssrServiceCategory as any).category_zh
-            : (ssrServiceCategory.category || ssrServiceCategory.title || '');
-          description = (ssrServiceCategory as any).description_zh && (ssrServiceCategory as any).description_zh.trim()
-            ? (ssrServiceCategory as any).description_zh
-            : (ssrServiceCategory.description || '');
-        } else {
-          // Default to Vietnamese
-          title = ssrServiceCategory.category || ssrServiceCategory.title || '';
-          description = ssrServiceCategory.description || '';
-        }
-        
-        let content = '';
-        if (currentLang.includes('en')) {
-          content = ((ssrServiceCategory as any).content_en && String((ssrServiceCategory as any).content_en).trim())
-            ? (ssrServiceCategory as any).content_en
-            : ((ssrServiceCategory as any).content || '');
-        } else if (currentLang.includes('zh')) {
-          content = ((ssrServiceCategory as any).content_zh && String((ssrServiceCategory as any).content_zh).trim())
-            ? (ssrServiceCategory as any).content_zh
-            : ((ssrServiceCategory as any).content || '');
-        } else {
-          content = (ssrServiceCategory as any).content || '';
-        }
+        const title = getLocalizedObjField(ssrServiceCategory as Record<string, any>, 'category', currentLang)
+          || getLocalizedObjField(ssrServiceCategory as Record<string, any>, 'title', currentLang)
+          || '';
+        const description = getLocalizedObjField(ssrServiceCategory as Record<string, any>, 'description', currentLang) || '';
+        const content = getLocalizedObjField(ssrServiceCategory as Record<string, any>, 'content', currentLang) || '';
         const dynamicCodeName = '';
         const dynamicCode = '';
         
@@ -1300,13 +1237,7 @@ const WuServicesPage: React.FC = () => {
 
     const fromServiceCategoryDirect = String(
       categoryKey === (effectiveSlug || '')
-        ? (
-            langCode === 'en'
-              ? (initialReactData?.serviceCategory?.content_en || initialReactData?.serviceCategory?.content || '')
-              : langCode === 'zh'
-                ? (initialReactData?.serviceCategory?.content_zh || initialReactData?.serviceCategory?.content || '')
-                : (initialReactData?.serviceCategory?.content || '')
-          )
+        ? getLocalizedObjField(initialReactData?.serviceCategory as Record<string, any> | undefined, 'content', langCode)
         : ''
     ).trim();
 
@@ -3075,11 +3006,7 @@ const WuServicesPage: React.FC = () => {
     const lotteryRenderableContent = pickRenderableHtml(
       lotteryContent,
       initialReactData?.pageContent,
-      currentLangCode === 'en'
-        ? (initialReactData?.serviceCategory?.content_en || initialReactData?.serviceCategory?.content)
-        : currentLangCode === 'zh'
-          ? (initialReactData?.serviceCategory?.content_zh || initialReactData?.serviceCategory?.content)
-          : initialReactData?.serviceCategory?.content,
+      getLocalizedObjField(initialReactData?.serviceCategory as Record<string, any> | undefined, 'content', currentLangCode),
       resolvedSeoCategory?.content || DEFAULT_KQXS_LANDING_CONTENT[currentLangCode],
       DEFAULT_KQXS_LANDING_CONTENT.vi
     );

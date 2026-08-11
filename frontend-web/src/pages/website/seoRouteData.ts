@@ -11,6 +11,30 @@ export type SeoRouteCategory = {
   [key: string]: any;
 };
 
+export function getLocalizedObjField(
+  obj: Record<string, any> | null | undefined,
+  fieldName: string,
+  language: string = 'vi'
+): string {
+  if (!obj || typeof obj !== 'object') return '';
+
+  const normalizedLang = String(language || 'vi').toLowerCase();
+  const langKey = normalizedLang.startsWith('en') ? 'en' : normalizedLang.startsWith('zh') ? 'zh' : 'vi';
+
+  const localeField = obj[`${fieldName}_${langKey}`];
+  if (typeof localeField === 'string' && localeField.trim()) return localeField.trim();
+
+  const directField = obj[fieldName];
+  if (typeof directField === 'string' && directField.trim()) return directField.trim();
+
+  const fallbackViField = obj[`${fieldName}_vi`];
+  if (typeof fallbackViField === 'string' && fallbackViField.trim()) return fallbackViField.trim();
+
+  if (typeof directField === 'string') return directField.trim();
+
+  return '';
+}
+
 export function normalizeSeoRouteKey(value?: string): string {
   return String(value || '').trim().replace(/^\/+|\/+$/g, '').toLowerCase();
 }
@@ -75,6 +99,20 @@ export function resolveCategoryMeta(
     description: pickLocalizedText(first, 'description', 'description', language),
     content: pickLocalizedContent(first, language),
   };
+}
+
+export function pickLocalizedField(
+  category: SeoRouteCategory | null | undefined,
+  fieldName: 'title' | 'description' | 'content',
+  language: string = 'vi'
+): string {
+  if (!category) return '';
+
+  if (fieldName === 'content') {
+    return pickLocalizedContent(category, language);
+  }
+
+  return pickLocalizedText(category, fieldName, 'category', language);
 }
 
 function pickLocalizedText(
