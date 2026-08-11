@@ -187,8 +187,8 @@ func HandleWebPath(st *state.AppState, w http.ResponseWriter, r *http.Request, u
 
 	if HasStaticExtension(uri) {
 		rpIndex := ResolveRPIndexPub(st.RecordManager, host)
-		if data, path, ok := readStaticFile(st, uri, rpIndex); ok {
-			writeFileResponse(w, path, data)
+		if data, path, enc, ok := readStaticFile(st, uri, rpIndex, r.Header.Get("Accept-Encoding")); ok {
+			writeFileResponse(w, path, data, enc)
 			return
 		}
 		http.NotFound(w, r)

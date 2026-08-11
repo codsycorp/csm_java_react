@@ -1,6 +1,9 @@
 package web
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestNormalizeSSRCacheQuery_DropsTrackingAndSorts(t *testing.T) {
 	got := normalizeSSRCacheQuery("utm_source=google&page=2&hl=vi&fbclid=abc&q=nha%20dep")
@@ -136,5 +139,24 @@ func TestShouldApplyServiceCategorySeoOverrides(t *testing.T) {
 		"serviceDetail":   map[string]any{"title": "Chi tiet"},
 	}) {
 		t.Fatal("expected category SEO to skip detail pages")
+	}
+}
+
+func TestBuildSSRResourceHints(t *testing.T) {
+	hints := buildSSRResourceHints("https://cdn.example.com/img/cover.jpg", "G-ABC123")
+	if !strings.Contains(hints, `dns-prefetch" href="//cdn.example.com`) {
+		t.Fatalf("missing dns-prefetch for og image host: %q", hints)
+	}
+	if !strings.Contains(hints, `preconnect" href="https://www.googletagmanager.com`) {
+		t.Fatalf("missing preconnect for gtag host: %q", hints)
+	}
+}
+
+func TestExtractHostFromAbsoluteURL(t *testing.T) {
+	if got := extractHostFromAbsoluteURL("https://cdn.example.com/path/file.jpg?x=1"); got != "cdn.example.com" {
+		t.Fatalf("unexpected host: %q", got)
+	}
+	if got := extractHostFromAbsoluteURL("/relative/path.jpg"); got != "" {
+		t.Fatalf("expected empty host for relative path, got %q", got)
 	}
 }

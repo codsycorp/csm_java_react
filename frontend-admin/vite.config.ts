@@ -123,21 +123,36 @@ export default defineVitestConfig(({ mode }) => {
 			assetFileNames: "admin/assets/[name].[hash].[ext]",
 			chunkFileNames: "admin/assets/[name].[hash].js",
 			entryFileNames: "admin/assets/[name].[hash].js",
-			// 🚀 ADVANCED CODE SPLITTING: Tách vendor thành nhiều chunks nhỏ
+			// Split heavy vendor modules to keep first-paint bundle lean for SSR pages.
 			manualChunks: (id) => {
-				// Only split HEAVY/STABLE libraries; keep polyfills/core bundled to fix init order
-				
-				// Chỉ tách React + Ant Design vì chúng PHẢI ở cùng nhau
-				// Mọi thứ khác để Vite tự động xử lý tránh circular dependency
+				if (!id.includes("node_modules")) return;
+
 				if (id.includes("node_modules/react") ||
 					id.includes("node_modules/react-dom") ||
 					id.includes("node_modules/antd") ||
 					id.includes("node_modules/@ant-design")) {
 					return "ui-core";
 				}
-				
-				// Tất cả vendor khác để Vite tự động bundle
-				// KHÔNG tách thủ công để tránh lỗi initialization
+				if (id.includes("node_modules/@codemirror") ||
+					id.includes("node_modules/@uiw/react-codemirror") ||
+					id.includes("node_modules/react-quill") ||
+					id.includes("node_modules/quill")) {
+					return "editor";
+				}
+				if (id.includes("node_modules/echarts") ||
+					id.includes("node_modules/echarts-for-react")) {
+					return "charts";
+				}
+				if (id.includes("node_modules/docxtemplater") ||
+					id.includes("node_modules/jszip") ||
+					id.includes("node_modules/xlsx") ||
+					id.includes("node_modules/pdfjs-dist") ||
+					id.includes("node_modules/html2pdf.js")) {
+					return "office";
+				}
+				if (id.includes("node_modules/@fullcalendar")) {
+					return "calendar";
+				}
 			},
 		  },
 		  external: [],

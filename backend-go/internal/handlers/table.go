@@ -435,6 +435,11 @@ func (h *TableHandler) handleUpdateOperation(out map[string]any, params map[stri
 		delete(finalObj, "data_app_ids")
 		delete(finalObj, "dataAppIds")
 	}
+	if msg := h.validateIncomingCategoryConsistency(appID, table, finalObj); msg != "" {
+		out["success"] = false
+		out["message"] = msg
+		return out
+	}
 	if command == "create" && len(pkFields) > 0 && !hasAnyPrimaryKeyValue(finalObj, pkFields) {
 		out["success"] = false
 		out["message"] = "Thiếu khóa chính: cần ít nhất 1 trong các trường " + strings.Join(pkFields, ", ")
@@ -464,6 +469,9 @@ func (h *TableHandler) handleUpdateOperation(out map[string]any, params map[stri
 	action := cmd
 	if action == "" {
 		action = "update"
+	}
+	if cleanup := h.autoCleanupContentRows(appID, table, finalObj, action); len(cleanup) > 0 {
+		out["dedupe_cleanup"] = cleanup
 	}
 	h.emitSocketUpdate(appID, table, action, finalObj)
 	h.captureLearningFromSavedRow(appID, table, action, finalObj)

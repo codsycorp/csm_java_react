@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"csm_server/backend-go/internal/data"
@@ -332,34 +333,148 @@ func serveStaticBytes(st *state.AppState, rel string, w http.ResponseWriter) boo
 }
 
 func staticCacheControl(path string) string {
+	base := strings.ToLower(filepath.Base(path))
 	ext := strings.ToLower(filepath.Ext(path))
-	switch ext {
-	case ".js", ".css", ".woff2", ".woff":
+
+	if strings.Contains(strings.ToLower(path), "/assets/") || looksLikeHashedAsset(base) {
 		return "public, max-age=31536000, immutable"
+	}
+
+	switch ext {
+	case ".js", ".mjs", ".css", ".woff2", ".woff", ".ttf", ".svg":
+		return "public, max-age=2592000"
 	default:
 		return "public, max-age=86400"
 	}
 }
 
-func writeFileResponse(w http.ResponseWriter, path string, data []byte) {
+func looksLikeHashedAsset(base string) bool {
+	if base == "" {
+		return false
+	}
+	name := strings.TrimSuffix(base, filepath.Ext(base))
+	parts := strings.FieldsFunc(name, func(r rune) bool {
+		return r == '.' || r == '-' || r == '_'
+	})
+	for _, part := range parts {
+		if len(part) < 8 {
+			continue
+		}
+		hexLike := true
+		for _, r := range part {
+			if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F') {
+				continue
+			}
+			hexLike = false
+			break
+		}
+		if hexLike {
+			return true
+		}
+	}
+	return false
+}
+
+func canServePrecompressed(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".js", ".mjs", ".css", ".html", ".json", ".xml", ".svg", ".txt", ".map":
+		return true
+	default:
+		return false
+	}
+}
+
+func acceptsEncoding(headerValue, encoding string) bool {
+	encoding = strings.ToLower(strings.TrimSpace(encoding))
+	if encoding == "" {
+		return false
+	}
+	headerValue = strings.TrimSpace(strings.ToLower(headerValue))
+	if headerValue == "" {
+		return false
+	}
+
+	parts := strings.Split(headerValue, ",")
+	for _, raw := range parts {
+		token := strings.TrimSpace(raw)
+		if token == "" {
+			continue
+		}
+		name := token
+		qVal := 1.0
+		if semi := strings.Index(token, ";"); semi >= 0 {
+			name = strings.TrimSpace(token[:semi])
+			attrs := strings.Split(token[semi+1:], ";")
+			for _, attr := range attrs {
+				attr = strings.TrimSpace(attr)
+				if !strings.HasPrefix(attr, "q=") {
+					continue
+				}
+				if q, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimPrefix(attr, "q=")), 64); err == nil {
+					qVal = q
+				}
+			}
+		}
+		if name == encoding || name == "*" {
+			return qVal > 0
+		}
+	}
+	return false
+}
+
+func preferredEncoding(acceptEncoding string) string {
+	if acceptsEncoding(acceptEncoding, "br") {
+		return "br"
+	}
+	if acceptsEncoding(acceptEncoding, "gzip") {
+		return "gzip"
+	}
+	return ""
+}
+
+func writeFileResponse(w http.ResponseWriter, path string, data []byte, contentEncoding string) {
 	w.Header().Set("Content-Type", mimeFromPath(path))
 	w.Header().Set("Cache-Control", staticCacheControl(path))
+	if contentEncoding != "" {
+		w.Header().Set("Content-Encoding", contentEncoding)
+		w.Header().Set("Vary", "Accept-Encoding")
+	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
 }
 
-func readStaticFile(st *state.AppState, uri, rpIndex string) ([]byte, string, bool) {
+func readStaticCandidate(path, acceptEncoding string) ([]byte, string, string, bool) {
+	if canServePrecompressed(path) {
+		enc := preferredEncoding(acceptEncoding)
+		if enc == "br" {
+			if data, err := os.ReadFile(path + ".br"); err == nil {
+				return data, path, "br", true
+			}
+		} else if enc == "gzip" {
+			if data, err := os.ReadFile(path + ".gz"); err == nil {
+				return data, path, "gzip", true
+			}
+		}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, "", "", false
+	}
+	return data, path, "", true
+}
+
+func readStaticFile(st *state.AppState, uri, rpIndex, acceptEncoding string) ([]byte, string, string, bool) {
 	rel := strings.TrimPrefix(uri, "/")
 	if path := st.RecordManager.GetStaticFile(rel); path != "" {
-		if data, err := os.ReadFile(path); err == nil {
-			return data, path, true
+		if data, sourcePath, enc, ok := readStaticCandidate(path, acceptEncoding); ok {
+			return data, sourcePath, enc, true
 		}
 	}
 	if rpIndex != "" {
 		rpRel := rpIndex + "/" + rel
 		if path := st.RecordManager.GetStaticFile(rpRel); path != "" {
-			if data, err := os.ReadFile(path); err == nil {
-				return data, path, true
+			if data, sourcePath, enc, ok := readStaticCandidate(path, acceptEncoding); ok {
+				return data, sourcePath, enc, true
 			}
 		}
 	}
@@ -369,12 +484,12 @@ func readStaticFile(st *state.AppState, uri, rpIndex string) ([]byte, string, bo
 		filepath.Join(publicRoot, "admin", rel),
 	} {
 		if info, err := os.Stat(p); err == nil && !info.IsDir() {
-			if data, err := os.ReadFile(p); err == nil {
-				return data, p, true
+			if data, sourcePath, enc, ok := readStaticCandidate(p, acceptEncoding); ok {
+				return data, sourcePath, enc, true
 			}
 		}
 	}
-	return nil, "", false
+	return nil, "", "", false
 }
 
 // ServeAppImages serves /app_images/* and /api/app_images/* paths.
@@ -395,5 +510,5 @@ func ServeAppImages(st *state.AppState, w http.ResponseWriter, r *http.Request, 
 		http.NotFound(w, r)
 		return
 	}
-	writeFileResponse(w, path, data)
+	writeFileResponse(w, path, data, "")
 }

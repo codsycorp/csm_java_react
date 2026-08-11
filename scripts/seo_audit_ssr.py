@@ -6,6 +6,7 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+from typing import Optional
 
 DEFAULT_BASE = "http://localhost:9999"
 DEFAULT_HOST_OVERRIDE = "localhost:3333"
@@ -60,12 +61,15 @@ def has(pattern: str, html: str) -> bool:
     return re.search(pattern, html, re.I | re.S) is not None
 
 
-def fetch_text(base: str, path: str, query: dict, timeout: int) -> tuple[str, int, dict, int]:
+def fetch_text(base: str, path: str, query: dict, timeout: int, headers: Optional[dict] = None) -> tuple[str, int, dict, int]:
     qs = urllib.parse.urlencode(query)
     url = f"{base}{path}"
     if qs:
         url = f"{url}?{qs}"
-    req = urllib.request.Request(url, headers={"User-Agent": "seo-audit/2.0"})
+    request_headers = {"User-Agent": "seo-audit/2.0"}
+    if headers:
+        request_headers.update(headers)
+    req = urllib.request.Request(url, headers=request_headers)
     t0 = time.perf_counter()
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         body = resp.read().decode("utf-8", errors="ignore")
@@ -74,7 +78,74 @@ def fetch_text(base: str, path: str, query: dict, timeout: int) -> tuple[str, in
         return body, int(resp.status), headers, latency_ms
 
 
-def check_page(path: str, lang: str, html: str, status: int, headers: dict, latency_ms: int, max_latency_ms: int) -> dict:
+def first_asset_path(html: str) -> str:
+    match = re.search(r"<script[^>]+src=\"([^\"]*?/assets/[^\"]+\.(?:js|mjs))\"", html, re.I)
+    if match:
+        return match.group(1).strip()
+    match = re.search(r"<link[^>]+href=\"([^\"]*?/assets/[^\"]+\.css)\"", html, re.I)
+    if match:
+        return match.group(1).strip()
+    return ""
+
+
+def check_asset_delivery(base: str, host_override: str, asset_path: str, timeout: int) -> dict:
+    if not asset_path:
+        return {
+            "asset_path": "",
+            "asset_status": 0,
+            "asset_latency_ms": 0,
+            "asset_content_encoding": "",
+            "asset_cache_control": "",
+            "asset_content_type": "",
+            "asset_checks": {
+                "asset_found_in_html": False,
+                "asset_fetch_ok": False,
+                "asset_compressed": False,
+                "asset_cache_present": False,
+                "asset_cache_immutable": False,
+            },
+            "asset_missing": ["asset_found_in_html", "asset_fetch_ok"],
+        }
+
+    normalized = asset_path if asset_path.startswith("/") else "/" + asset_path
+    body, status, headers, latency_ms = fetch_text(
+        base,
+        normalized,
+        {"__host": host_override},
+        timeout,
+        headers={"Accept-Encoding": "br, gzip"},
+    )
+    _ = body
+    cache_control = headers.get("cache-control", "")
+    content_encoding = headers.get("content-encoding", "")
+    checks = {
+        "asset_found_in_html": True,
+        "asset_fetch_ok": status == 200,
+        "asset_compressed": content_encoding.lower() in {"br", "gzip"},
+        "asset_cache_present": bool(cache_control),
+        "asset_cache_immutable": "immutable" in cache_control.lower() if "/assets/" in normalized else bool(cache_control),
+    }
+    required = [
+        "asset_found_in_html",
+        "asset_fetch_ok",
+        "asset_compressed",
+        "asset_cache_present",
+        "asset_cache_immutable",
+    ]
+    missing = [k for k in required if not checks.get(k, False)]
+    return {
+        "asset_path": normalized,
+        "asset_status": status,
+        "asset_latency_ms": latency_ms,
+        "asset_content_encoding": content_encoding,
+        "asset_cache_control": cache_control,
+        "asset_content_type": headers.get("content-type", ""),
+        "asset_checks": checks,
+        "asset_missing": missing,
+    }
+
+
+def check_page(path: str, lang: str, html: str, status: int, headers: dict, latency_ms: int, max_latency_ms: int, asset_report: dict) -> dict:
     path_depth = len([s for s in path.split("/") if s.strip()])
     latency_budget = max_latency_ms if path_depth <= 1 else max(max_latency_ms, 2200)
 
@@ -101,6 +172,11 @@ def check_page(path: str, lang: str, html: str, status: int, headers: dict, late
         "article_mod": "article:modified_time" in html,
         "latency_ok": latency_ms <= latency_budget,
         "html_content_type": "text/html" in headers.get("content-type", "").lower(),
+        "asset_found_in_html": asset_report["asset_checks"]["asset_found_in_html"],
+        "asset_fetch_ok": asset_report["asset_checks"]["asset_fetch_ok"],
+        "asset_compressed": asset_report["asset_checks"]["asset_compressed"],
+        "asset_cache_present": asset_report["asset_checks"]["asset_cache_present"],
+        "asset_cache_immutable": asset_report["asset_checks"]["asset_cache_immutable"],
     }
 
     required = [
@@ -116,6 +192,11 @@ def check_page(path: str, lang: str, html: str, status: int, headers: dict, late
         "jsonld_breadcrumb",
         "latency_ok",
         "html_content_type",
+        "asset_found_in_html",
+        "asset_fetch_ok",
+        "asset_compressed",
+        "asset_cache_present",
+        "asset_cache_immutable",
     ]
     missing = [k for k in required if not checks.get(k, False)]
 
@@ -126,6 +207,7 @@ def check_page(path: str, lang: str, html: str, status: int, headers: dict, late
         "latency_ms": latency_ms,
         "latency_budget_ms": latency_budget,
         "content_type": headers.get("content-type", ""),
+        "asset": asset_report,
         "checks": checks,
         "required": required,
         "missing": missing,
@@ -203,6 +285,8 @@ def main() -> int:
                     {"__host": args.host_override, "hl": lang},
                     args.timeout,
                 )
+                asset_path = first_asset_path(html)
+                asset_report = check_asset_delivery(args.base, args.host_override, asset_path, args.timeout)
                 page_results.append(
                     check_page(
                         path,
@@ -212,6 +296,7 @@ def main() -> int:
                         headers,
                         latency_ms,
                         args.max_latency_ms if len([s for s in path.split("/") if s.strip()]) <= 1 else args.max_latency_detail_ms,
+                        asset_report,
                     )
                 )
             except Exception as exc:

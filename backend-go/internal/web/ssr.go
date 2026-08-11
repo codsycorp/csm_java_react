@@ -715,6 +715,8 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 	if strings.HasPrefix(ogImage, "http://") || strings.HasPrefix(ogImage, "https://") {
 		preload = fmt.Sprintf(`<link rel="preload" as="image" href="%s" fetchpriority="high">`, htmlEsc(ogImage))
 	}
+	resourceHints := buildSSRResourceHints(ogImage, route.GTag)
+	headHints := preload + resourceHints
 	pageType := resolveSSRPageType(initialData)
 
 	filePath := ctx.RM.GetStaticFile(indexPath)
@@ -748,7 +750,7 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 					GTag:            route.GTag,
 					AppID:           route.AppID,
 					PageType:        pageType,
-					Preload:         template.HTML(preload),
+					Preload:         template.HTML(headHints),
 					StructuredData:  template.HTML(buildStructuredDataGraph(&preprocessCtx{Title: pageTitle, Description: pageDescription, Keywords: pageKeywords, Canonical: canonical, Image: ogImage, SiteName: baseURL, Logo: routeLogo, GSV: route.GSV, GTag: route.GTag, AppID: route.AppID, PageType: pageType, Author: resolveSSRAuthor(initialData), PublishedAt: resolveSSRPublishedAt(initialData), ModifiedAt: resolveSSRModifiedAt(initialData), Lang: lang, PagePath: normalizedPath, BaseURL: baseURL, DefaultCategory: defaultServiceCode, InitialData: initialData, Categories: categories})),
 					InjectedScripts: template.HTML(scripts),
 				})
@@ -783,7 +785,7 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 				Categories:      categories,
 			})
 			finalizeThymeleafHTML(&html, &preprocessCtx{GTag: route.GTag})
-			injectIntoHTML(&html, preload+scripts)
+			injectIntoHTML(&html, headHints+scripts)
 			markStage("template")
 			return html
 		}
@@ -2820,6 +2822,64 @@ func injectIntoHTML(html *string, scripts string) {
 		return
 	}
 	*html += scripts
+}
+
+func buildSSRResourceHints(ogImage, gtag string) string {
+	hosts := map[string]struct{}{}
+
+	if host := extractHostFromAbsoluteURL(ogImage); host != "" {
+		hosts[host] = struct{}{}
+	}
+	if strings.TrimSpace(gtag) != "" {
+		hosts["www.googletagmanager.com"] = struct{}{}
+	}
+
+	if len(hosts) == 0 {
+		return ""
+	}
+
+	ordered := make([]string, 0, len(hosts))
+	for host := range hosts {
+		ordered = append(ordered, host)
+	}
+	slices.Sort(ordered)
+
+	var b strings.Builder
+	for _, host := range ordered {
+		href := "https://" + host
+		b.WriteString(`<link rel="dns-prefetch" href="//`)
+		b.WriteString(htmlEsc(host))
+		b.WriteString(`">`)
+		b.WriteByte('\n')
+		b.WriteString(`<link rel="preconnect" href="`)
+		b.WriteString(htmlEsc(href))
+		b.WriteString(`" crossorigin>`)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+func extractHostFromAbsoluteURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if !strings.HasPrefix(raw, "https://") && !strings.HasPrefix(raw, "http://") {
+		return ""
+	}
+	raw = strings.TrimPrefix(raw, "https://")
+	raw = strings.TrimPrefix(raw, "http://")
+	if i := strings.Index(raw, "/"); i >= 0 {
+		raw = raw[:i]
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if i := strings.Index(raw, ":"); i >= 0 {
+		raw = raw[:i]
+	}
+	return strings.ToLower(raw)
 }
 
 func fallbackHTML(ctx *preprocessCtx, uri, appID, rpIndex, scripts string) string {
