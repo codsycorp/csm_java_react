@@ -11,14 +11,14 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 
 import { Dropdown } from "antd";
-import { cloneElement } from "react";
+import { forwardRef } from "react";
 
 interface DraggableTabPaneProps extends React.HTMLAttributes<HTMLElement> {
 	"data-node-key": string
 	"children": React.ReactElement
 }
 
-export function DraggableTabNode({ className, children, ...props }: DraggableTabPaneProps) {
+export const DraggableTabNode = forwardRef<HTMLElement, DraggableTabPaneProps>(function DraggableTabNode({ className, children, ...props }, _ref) {
 	const { attributes, listeners, setNodeRef, transform, transition } = useSortable({
 		id: props["data-node-key"],
 		// transition: null,
@@ -31,16 +31,19 @@ export function DraggableTabNode({ className, children, ...props }: DraggableTab
 		cursor: "move",
 	};
 
-	return cloneElement(children, {
-		ref: setNodeRef,
-		...props,
-		style,
-		className,
-		...attributes,
-		...listeners,
-		// draggable: "true",
-	});
-}
+	return (
+		<span
+			ref={setNodeRef}
+			{...props}
+			style={style}
+			className={className}
+			{...attributes}
+			{...listeners}
+		>
+			{children}
+		</span>
+	);
+});
 interface DraggableTabBarProps {
 	tabBarProps: Parameters<Required<TabsProps>["renderTabBar"]>[0]
 	DefaultTabBar: Parameters<Required<TabsProps>["renderTabBar"]>[1]

@@ -65,9 +65,15 @@ function toArrayOfStrings(v: any): string[] | undefined {
 export function normalizeServiceDetail(raw: any): ServicePost {
   const id = String(raw?.id ?? raw?.service_id ?? "");
   const title = String(raw?.title ?? raw?.name ?? "");
+  const title_en = raw?.title_en ?? undefined;
+  const title_zh = raw?.title_zh ?? undefined;
   const slug = String(raw?.slug ?? (title ? slugify(title) : ""));
   const excerpt = raw?.excerpt ?? raw?.summary ?? raw?.meta_description ?? "";
+  const excerpt_en = raw?.excerpt_en ?? undefined;
+  const excerpt_zh = raw?.excerpt_zh ?? undefined;
   const content = raw?.content ?? raw?.html ?? "";
+  const content_en = raw?.content_en ?? undefined;
+  const content_zh = raw?.content_zh ?? undefined;
   
   // Helper to get first string from array or parse JSON array string
   const getFirstString = (value: any): string | undefined => {
@@ -96,7 +102,9 @@ export function normalizeServiceDetail(raw: any): ServicePost {
   // service_code (web_services) tương đương service_type (web_service_detail)
   // Không còn dùng category/service_category nữa
   const serviceType = raw?.service_type ?? raw?.service_code ?? raw?.type ?? undefined;
-  const category = undefined;
+  const category = raw?.category ?? undefined;
+  const category_en = raw?.category_en ?? undefined;
+  const category_zh = raw?.category_zh ?? undefined;
   const serviceId = raw?.service_id ? String(raw.service_id) : undefined;
   // Đảm bảo có thể đọc code từ cả 2 cột tùy bảng/nguồn dữ liệu
   const serviceCode = raw?.service_code ?? raw?.service_type ?? undefined;
@@ -146,14 +154,22 @@ export function normalizeServiceDetail(raw: any): ServicePost {
   return {
     id,
     title,
+    title_en,
+    title_zh,
     slug,
     excerpt,
+    excerpt_en,
+    excerpt_zh,
     content,
+    content_en,
+    content_zh,
     thumbnail,
     images,
     videos,
     serviceType,
     category,
+    category_en,
+    category_zh,
     serviceId,
     serviceCode,
     publishDate,

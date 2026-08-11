@@ -295,6 +295,7 @@ const SYSTEM_USER_FIELD_WIDTHS: Record<string, number> = {
 	full_name: 200,
 	app_id: 220,
 	data_app_ids: 280,
+	account_expiry_days: 180,
 	account_expiry_at: 180,
 	permissionGroups: 220,
 	permissionsAdd: 220,
@@ -320,7 +321,7 @@ export const SYSTEM_ACCOUNT_DEFAULT_FIELDS: TableField[] = [
 	{ f_name: "data_app_ids", f_header: "system.userPermission.fields.dataAppIds", f_show: 1, f_types: "multi_tag", f_align: "left", f_cbo_query: APP_ID_QUERY_JSON, f_width: SYSTEM_USER_FIELD_WIDTHS.data_app_ids } as any,
 	{ f_name: "dev", f_header: "system.userPermission.option.dev", f_show: 1, f_types: "checkbox", f_align: "left" },
 	{ f_name: "app_token", f_header: "common.appToken", f_show: 0, f_types: "string", f_align: "left" },
-	{ f_name: "account_expiry_at", f_header: "Hạn tài khoản", f_header_en: "Account Expiry", f_show: 1, f_types: "datetime", f_align: "left", f_width: SYSTEM_USER_FIELD_WIDTHS.account_expiry_at },
+	{ f_name: "account_expiry_days", f_header: "Số ngày sử dụng", f_header_en: "Account Expiry Days", f_show: 1, f_types: "number", f_align: "left", f_width: SYSTEM_USER_FIELD_WIDTHS.account_expiry_days },
 	{ f_name: "pass", f_header: "common.password", f_show: 1, f_types: "password", f_align: "left", f_width: SYSTEM_USER_FIELD_WIDTHS.pass },
 	{ f_name: "roles", f_header: "system.userPermission.fields.roles", f_show: 0, f_types: "co", f_align: "left", f_cbo_query: ROLE_SELECT_QUERY_JSON },
 	{ f_name: "permissionPreset", f_header: "system.userPermission.fields.permissionPreset", f_show: 0, f_types: "co", f_align: "left", f_cbo_query: ACTION_PRESET_OPTIONS_JSON },
@@ -370,7 +371,7 @@ export const SUB_USER_DEFAULT_FIELDS: TableField[] = [
 	{ f_name: "app_id", f_header: "common.menu.apps", f_show: 0, f_types: "co_ro", f_align: "left", f_cbo_query: APP_ID_QUERY_JSON, f_width: SYSTEM_USER_FIELD_WIDTHS.app_id } as any,
 	{ f_name: "group_id", f_header: "system.userPermission.fields.permissionGroups", f_show: 1, f_types: "co", f_align: "left", f_cbo_query: PERMISSION_GROUP_QUERY_JSON, f_width: SYSTEM_USER_FIELD_WIDTHS.group_id },
 	{ f_name: "app_token", f_header: "common.appToken", f_show: 1, f_types: "string", f_align: "left" },
-	{ f_name: "account_expiry_at", f_header: "Hạn tài khoản", f_header_en: "Account Expiry", f_show: 1, f_types: "datetime", f_align: "left", f_width: SYSTEM_USER_FIELD_WIDTHS.account_expiry_at },
+	{ f_name: "account_expiry_days", f_header: "Số ngày sử dụng", f_header_en: "Account Expiry Days", f_show: 1, f_types: "number", f_align: "left", f_width: SYSTEM_USER_FIELD_WIDTHS.account_expiry_days },
 	{ f_name: "pass", f_header: "common.password", f_show: 1, f_types: "password", f_align: "left", f_width: SYSTEM_USER_FIELD_WIDTHS.pass },
 	{ f_name: "permissionPreset", f_header: "system.userPermission.fields.permissionPreset", f_show: 0, f_types: "co", f_align: "left", f_cbo_query: ACTION_PRESET_OPTIONS_JSON },
 	{ f_name: "permissionGroups", f_header: "system.userPermission.fields.permissionGroups", f_show: 0, f_types: "co", f_align: "left", f_cbo_query: PERMISSION_GROUP_QUERY_JSON, f_width: SYSTEM_USER_FIELD_WIDTHS.permissionGroups },
@@ -403,7 +404,7 @@ export const SUB_USER_DEFAULT_FIELDS: TableField[] = [
 		f_options: MENU_PERMISSION_OPTIONS,
 		f_width: SYSTEM_USER_FIELD_WIDTHS.menusPermissionsDeny,
 	} as any,
-	{ f_name: "permissionBitfield", f_header: "system.userPermission.fields.permissionBitfield", f_show: 1, f_types: "string_ro", f_align: "left" },
+	{ f_name: "permissionBitfield", f_header: "system.userPermission.fields.permissionBitfield", f_show: 0, f_types: "string_ro", f_align: "left" },
 	{ f_name: "permissionSchemaVersion", f_header: "system.userPermission.fields.permissionSchemaVersion", f_show: 0, f_types: "string", f_align: "left" },
 	{ f_name: "dataScope", f_header: "system.userPermission.fields.dataScope", f_show: 1, f_types: "co", f_align: "left", f_cbo_query: DATA_SCOPE_OPTIONS_JSON, f_width: SYSTEM_USER_FIELD_WIDTHS.dataScope },
 	{ f_name: "branch_id", f_header: "system.userPermission.fields.branchId", f_show: 0, f_types: "co", f_align: "left", f_cbo_query: BRANCH_SELECT_QUERY_JSON },
@@ -487,6 +488,84 @@ function beforeSave(row, seft) {
 
 	function uniqueList(items) {
 		return Array.from(new Set((items || []).map((item) => String(item || "").trim()).filter(Boolean)));
+	}
+
+	function parsePositiveInt(value) {
+		if (value == null || value === "") return 0;
+		const parsed = Number.parseInt(String(value).trim(), 10);
+		return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+	}
+
+	function daysFromExpiryAt(expiryAt) {
+		const normalized = Number(expiryAt || 0);
+		if (!Number.isFinite(normalized) || normalized <= 0) return 0;
+		const remaining = normalized - Date.now();
+		if (remaining <= 0) return 0;
+		return Math.ceil(remaining / 86400000);
+	}
+
+	function applyAccountExpiryDays(row) {
+		const hasDaysField = Object.prototype.hasOwnProperty.call(row, "account_expiry_days");
+		const currentExpiryAt = Number(row.account_expiry_at || row.accountExpiryAt || 0);
+		const normalizedDays = hasDaysField ? parsePositiveInt(row.account_expiry_days) : daysFromExpiryAt(currentExpiryAt);
+		row.account_expiry_days = normalizedDays;
+		if (currentExpiryAt > 0) {
+			row.account_expiry_at = currentExpiryAt;
+			row.accountExpiryAt = currentExpiryAt;
+		}
+		return row;
+	}
+
+	function parsePositiveInt(value) {
+		if (value == null || value === "") return 0;
+		const parsed = Number.parseInt(String(value).trim(), 10);
+		return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+	}
+
+	function daysFromExpiryAt(expiryAt) {
+		const normalized = Number(expiryAt || 0);
+		if (!Number.isFinite(normalized) || normalized <= 0) return 0;
+		const remaining = normalized - Date.now();
+		if (remaining <= 0) return 0;
+		return Math.ceil(remaining / 86400000);
+	}
+
+	function applyAccountExpiryDays(row) {
+		const hasDaysField = Object.prototype.hasOwnProperty.call(row, "account_expiry_days");
+		const currentExpiryAt = Number(row.account_expiry_at || row.accountExpiryAt || 0);
+		const normalizedDays = hasDaysField ? parsePositiveInt(row.account_expiry_days) : daysFromExpiryAt(currentExpiryAt);
+		row.account_expiry_days = normalizedDays;
+		if (currentExpiryAt > 0) {
+			row.account_expiry_at = currentExpiryAt;
+			row.accountExpiryAt = currentExpiryAt;
+		}
+		return row;
+	}
+
+	function parsePositiveInt(value) {
+		if (value == null || value === "") return 0;
+		const parsed = Number.parseInt(String(value).trim(), 10);
+		return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+	}
+
+	function daysFromExpiryAt(expiryAt) {
+		const normalized = Number(expiryAt || 0);
+		if (!Number.isFinite(normalized) || normalized <= 0) return 0;
+		const remaining = normalized - Date.now();
+		if (remaining <= 0) return 0;
+		return Math.ceil(remaining / 86400000);
+	}
+
+	function applyAccountExpiryDays(row) {
+		const hasDaysField = Object.prototype.hasOwnProperty.call(row, "account_expiry_days");
+		const currentExpiryAt = Number(row.account_expiry_at || row.accountExpiryAt || 0);
+		const normalizedDays = hasDaysField ? parsePositiveInt(row.account_expiry_days) : daysFromExpiryAt(currentExpiryAt);
+		row.account_expiry_days = normalizedDays;
+		if (currentExpiryAt > 0) {
+			row.account_expiry_at = currentExpiryAt;
+			row.accountExpiryAt = currentExpiryAt;
+		}
+		return row;
 	}
 
 	function listMinus(source, denied) {
@@ -838,6 +917,7 @@ function beforeSave(row, seft) {
 	row.menusPermissionsAdd = normalizeList(row.menusPermissionsAdd);
 	row.menusPermissionsDeny = normalizeList(row.menusPermissionsDeny);
 	row.permissionPreset = String(row.permissionPreset || "").trim();
+	applyAccountExpiryDays(row);
 	const parentPermissions = normalizeList(seft?.user?.permissions);
 	const parentMenus = normalizeList(seft?.user?.menusPermissions);
 	const parentScope = String(seft?.user?.dataScope || "ALL").trim().toUpperCase() || "ALL";
@@ -903,6 +983,43 @@ function beforeSave(row, seft) {
 		return String(item || "").trim().toLowerCase() !== menuAppId.toLowerCase();
 	});
 	return row;
+}
+`;
+
+export const SYSTEM_USER_DATACOLUMN_TEMPLATE = `
+function datacolumnTemplate(columns, seft, React) {
+	function getAccountExpiryDays(row) {
+		const directDays = Number(row?.account_expiry_days);
+		if (Number.isFinite(directDays) && directDays >= 0) {
+			return directDays;
+		}
+		const expiryAt = Number(row?.account_expiry_at || row?.accountExpiryAt || 0);
+		if (!Number.isFinite(expiryAt) || expiryAt <= 0) {
+			return "";
+		}
+		const remaining = expiryAt - Date.now();
+		if (remaining <= 0) {
+			return 0;
+		}
+		return Math.ceil(remaining / 86400000);
+	}
+
+	return (columns || []).map((col) => {
+		const dataIndex = String(col?.dataIndex || col?.key || "").trim();
+		if (dataIndex !== "account_expiry_days") {
+			return col;
+		}
+		return {
+			...col,
+			render: (_dom, record) => {
+				const days = getAccountExpiryDays(record);
+				if (days === "") {
+					return "";
+				}
+				return React.createElement("span", { title: String(days) }, String(days));
+			},
+		};
+	});
 }
 `;
 
@@ -1315,6 +1432,19 @@ function beforeSave(row, seft) {
 		row.menusPermissions = listMinus(mergedMenuAllow, row.menusPermissionsDeny);
 	}
 
+	const targetDays = parsePositiveInt(row.account_expiry_days);
+	const expiryAt = targetDays > 0
+		? (() => {
+			const next = new Date();
+			next.setDate(next.getDate() + targetDays);
+			next.setHours(23, 59, 59, 999);
+			return next.getTime();
+		})()
+		: 0;
+	row.account_expiry_days = targetDays;
+	row.account_expiry_at = expiryAt;
+	row.accountExpiryAt = expiryAt;
+
 	if (!actorIsDev) {
 		row.permissions = intersectPreserveOrder(row.permissions, parentPermissions);
 		row.menusPermissions = hasLegacyAppScope(parentMenus, sourceAppId)
@@ -1516,6 +1646,7 @@ row.menusPermissions = normalizeList(row.menusPermissions);
 row.menusPermissionsAdd = normalizeList(row.menusPermissionsAdd);
 row.menusPermissionsDeny = normalizeList(row.menusPermissionsDeny);
 row.permissionPreset = String(row.permissionPreset || "").trim();
+	applyAccountExpiryDays(row);
 
 row.permissionsAdd = listMinus(row.permissionsAdd, row.permissionsDeny);
 row.menusPermissionsAdd = listMinus(row.menusPermissionsAdd, row.menusPermissionsDeny);
@@ -1782,11 +1913,35 @@ export function mergeMenuTableFields(
 			}))
 			: field?.f_options,
 	});
-	const existingNames = new Set(existingFields.map((field: any) => String(field?.f_name || "").trim()));
+	const normalizeFieldName = (fieldName: any) => {
+		const value = String(fieldName || "").trim();
+		if (value === "account_expiry_at") {
+			return "account_expiry_days";
+		}
+		return value;
+	};
+	const existingNames = new Set(existingFields.map((field: any) => normalizeFieldName(field?.f_name)));
 	const missingFields = defaultFields
 		.filter((field) => !existingNames.has(field.f_name))
 		.map((field) => translateField(field));
-	const normalizedExistingFields = existingFields.map((field: any) => translateField(field));
+	const normalizedExistingFields = existingFields.map((field: any) => {
+		const normalizedName = normalizeFieldName(field?.f_name);
+		const translated = translateField({
+			...field,
+			f_name: normalizedName,
+		});
+		if (normalizedName === "account_expiry_days") {
+			return {
+				...translated,
+				f_types: "number",
+				f_header: translateLabel("Số ngày sử dụng"),
+				f_header_vi: String(translated?.f_header_vi || "").trim() || "Số ngày sử dụng",
+				f_header_en: String(translated?.f_header_en || "").trim() || "Account Expiry Days",
+				f_width: Math.max(Number(translated?.f_width || 0), Number(SYSTEM_USER_FIELD_WIDTHS.account_expiry_days || 0)) || translated?.f_width,
+			};
+		}
+		return translated;
+	});
 	const merged = [...normalizedExistingFields, ...missingFields];
 	const enforced = merged.map((field: any) => {
 		const fName = String(field?.f_name || "").trim();
@@ -1820,6 +1975,17 @@ export function mergeMenuTableFields(
 				f_types: "multi_tag",
 				f_width: Math.max(Number(field?.f_width || 0), Number(SYSTEM_USER_FIELD_WIDTHS.data_app_ids || 0)) || field?.f_width,
 				f_cbo_query: field?.f_cbo_query || APP_ID_QUERY_JSON,
+			};
+		}
+		if (fName === "account_expiry_days") {
+			return {
+				...field,
+				f_types: "number",
+				f_header: translateLabel("Số ngày sử dụng"),
+				f_header_vi: translateLabelByLang("Số ngày sử dụng", "vi"),
+				f_header_en: translateLabelByLang("Account Expiry Days", "en"),
+				f_header_zh: translateLabelByLang("Account Expiry Days", "zh"),
+				f_width: Math.max(Number(field?.f_width || 0), Number(SYSTEM_USER_FIELD_WIDTHS.account_expiry_days || 0)) || field?.f_width,
 			};
 		}
 		if (fName === "group_id" || fName === "permissionGroups") {
@@ -1891,7 +2057,7 @@ export function getDefaultSystemUserModeConfig(
 	return {
 		table_name: mode === "main" ? "csm_accounts" : "csm_group_members",
 		table: mergeMenuTableFields([], defaultFields, t, tEn, tZh),
-		trigger: { beforeSave: defaultBeforeSave, update: SYSTEM_USER_UPDATE_TRIGGER },
+		trigger: { beforeSave: defaultBeforeSave, update: SYSTEM_USER_UPDATE_TRIGGER, datacolumntemplate: SYSTEM_USER_DATACOLUMN_TEMPLATE },
 		type_form: 1,
 		row_type_edit: 0,
 		g_readonly: false,
@@ -1921,6 +2087,7 @@ function normalizeModeConfig(
 			...rawTrigger,
 			beforeSave: rawTrigger.beforeSave || (fallback.trigger as any)?.beforeSave,
 			update: rawTrigger.update || (fallback.trigger as any)?.update,
+			datacolumntemplate: rawTrigger.datacolumntemplate || (fallback.trigger as any)?.datacolumntemplate,
 		},
 		type_form: rawMode?.type_form ?? fallback.type_form,
 		row_type_edit: rawMode?.row_type_edit ?? fallback.row_type_edit,

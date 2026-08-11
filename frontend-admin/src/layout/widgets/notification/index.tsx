@@ -174,9 +174,43 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 	const { internalUsersWithUnread, guestUsersWithUnread } = useMemo(() => {
 		const internalMap = new Map<string, { key: string; room: string; username: string; userId?: string; avatar?: string; unread: number; lastTs: number; appId?: string }>();
 		const guestMap = new Map<string, { key: string; room: string; label: string; unread: number; pendingForApp: number; lastTs: number; appId?: string }>();
+
+		const parseRoomContext = (roomKey: string) => {
+			const room = String(roomKey || '').trim();
+			if (!room) return null;
+			if (room.startsWith('guest:')) {
+				const payload = room.slice('guest:'.length);
+				const [roomAppId = '', ...rest] = payload.split(';');
+				return {
+					kind: 'guest' as const,
+					appId: String(roomAppId || '').trim(),
+					guestKey: String(rest.join(';') || '').trim(),
+				};
+			}
+			if (room.startsWith('private:')) {
+				const payload = room.slice('private:'.length);
+				const [roomAppId = '', ...participants] = payload.split(';');
+				return {
+					kind: 'internal' as const,
+					appId: String(roomAppId || '').trim(),
+					peerHint: String(participants.filter(Boolean).join(' · ') || '').trim(),
+				};
+			}
+			if (room.startsWith('user:')) {
+				const payload = room.slice('user:'.length);
+				const [roomAppId = '', ...rest] = payload.split(';');
+				return {
+					kind: 'internal' as const,
+					appId: String(roomAppId || '').trim(),
+					peerHint: String(rest.join(';') || '').trim(),
+				};
+			}
+			return null;
+		};
 		
 		// Duyệt TẤT CẢ rooms trong contextMessages để không bỏ lỡ tin của guests
 		Object.entries(contextMessages).forEach(([roomKey, msgs]) => {
+			const roomContext = parseRoomContext(roomKey);
 			msgs.forEach((msg: any) => {
 				// Skip broadcast notifications - xử lý riêng ở section System Messages
 				if (msg.eventType === 'broadcast_notification') {
@@ -195,14 +229,15 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 					: false;
 				const isUnread = !hasRead;
 				const readByList = Array.isArray(msg.readBy) ? msg.readBy.map((v: any) => String(v || '').trim()).filter(Boolean) : [];
+				const inferredAppId = String(msg.appId || roomContext?.appId || appId || '').trim();
 				
 				// PRIORITY: Check guestPhone FIRST - guest messages go to guests section
-				if (msg.guestSessionId || msg.guestPhone) {
-					const guestKey = String(msg.guestSessionId || msg.guestPhone).trim();
+				if (msg.guestSessionId || msg.guestPhone || roomContext?.kind === 'guest') {
+					const guestKey = String(msg.guestSessionId || msg.guestPhone || roomContext?.guestKey || '').trim();
 					if (guestKey) {
 						const guestRoom = String(roomKey || '').startsWith('guest:')
 							? String(roomKey)
-							: `guest:${(msg.appId || appId || '').trim()};${guestKey}`;
+							: `guest:${inferredAppId};${guestKey}`;
 						const guestLabel = formatGuestLabel(guestKey, msg.guestPhone, msg.username, msg.isAdmin);
 						const existing = guestMap.get(guestRoom) || {
 							key: guestRoom,
@@ -214,7 +249,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 							appId: (msg.appId || '').trim(),
 						};
 						existing.label = guestLabel || existing.label;
-						existing.appId = (msg.appId || existing.appId || '').trim();
+						existing.appId = inferredAppId || existing.appId || '';
 						existing.lastTs = Math.max(existing.lastTs || 0, Number(msg.timestamp || 0));
 						if (isUnread && !msg.isAdmin) existing.unread++;
 
@@ -227,13 +262,13 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 					}
 				} 
 				// THEN: Check internal user (userId or username) - must NOT have guestPhone
-				else if (msg.userId || msg.username) {
-					const username = (msg.username || msg.to || '').trim();
+				else if (msg.userId || msg.username || roomContext?.kind === 'internal') {
+					const username = (msg.username || msg.to || roomContext?.peerHint || '').trim();
 					const senderId = String(msg.userId || '').trim();
 					if (!username) return;
 					const currentUser = (user.username || '').trim();
 					if (username === currentUser) return; // Skip self-messages
-					const appToken = (msg.appId || appId || '').trim();
+					const appToken = inferredAppId;
 					const internalRoom = String(roomKey || '').trim() || `user:${appToken};${username}`;
 					const internalKey = senderId ? `${appToken}::${senderId}` : `${appToken}::${username}`;
 					const existing = internalMap.get(internalKey) || {
@@ -247,7 +282,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 						appId: appToken,
 					};
 					existing.lastTs = Math.max(existing.lastTs || 0, Number(msg.timestamp || 0));
-					existing.appId = (msg.appId || existing.appId || '').trim();
+					existing.appId = appToken || existing.appId || '';
 					existing.room = internalRoom || existing.room;
 					existing.userId = existing.userId || (senderId || undefined);
 					if (isUnread) existing.unread++;
@@ -261,9 +296,11 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 		const guestUsersWithUnread = Array.from(guestMap.values())
 			.sort((a, b) => (b.unread - a.unread) || (b.lastTs - a.lastTs));
 		
-		console.log(`👥 [Notification] Parsed ${internalUsersWithUnread.length} internal users & ${guestUsersWithUnread.length} guests`);
-		console.log(`📊 [Notification] Internal users:`, internalUsersWithUnread.map(u => u.username));
-		console.log(`📱 [Notification] Guests:`, guestUsersWithUnread.map(g => g.key));
+		if (internalUsersWithUnread.length > 0 || guestUsersWithUnread.length > 0) {
+			console.log(`👥 [Notification] Parsed ${internalUsersWithUnread.length} internal users & ${guestUsersWithUnread.length} guests`);
+			console.log(`📊 [Notification] Internal users:`, internalUsersWithUnread.map(u => u.username));
+			console.log(`📱 [Notification] Guests:`, guestUsersWithUnread.map(g => g.key));
+		}
 		
 		return { internalUsersWithUnread, guestUsersWithUnread };
 	}, [contextMessages, appId, user.userId, user.username, formatGuestLabel, isDevUser]);

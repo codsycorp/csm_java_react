@@ -4,16 +4,42 @@
  */
 import { csmDecrypt } from "./CsmCrypto";
 
+function looksLikePlainTriggerCode(text: string): boolean {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) return false;
+  if (/^(function\s|\(function\s|\(async\s*function|\(async\s*\()/.test(trimmed)) return true;
+  if (/^return\s+/.test(trimmed)) return true;
+  if (/=>/.test(trimmed)) return true;
+  if (/\b(const|let|var|if|for|while|switch|try|catch|class)\b/.test(trimmed)) return true;
+  if (/^[\[{]/.test(trimmed)) return true;
+  if (/<[a-z][\s\S]*>/i.test(trimmed)) return true;
+  return false;
+}
+
+function looksEncryptedTriggerBody(text: string): boolean {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) return false;
+  if (looksLikePlainTriggerCode(trimmed)) return false;
+  if (/^U2F/.test(trimmed) || /^eyJ/.test(trimmed)) return true;
+  return /^[A-Za-z0-9+/=_-]{80,}$/.test(trimmed);
+}
+
 export function resolveTriggerBody(
   raw: unknown,
   decrypt?: (s: string) => string,
 ): string {
   if (raw == null) return "";
-  let code = String(raw);
+  const code = String(raw);
+  if (looksLikePlainTriggerCode(code)) {
+    return code;
+  }
+  if (!looksEncryptedTriggerBody(code)) {
+    return code;
+  }
   const effectiveDecrypt = decrypt ?? csmDecrypt;
   try {
     const dec = effectiveDecrypt(code);
-    if (dec && typeof dec === "string") code = dec;
+    if (dec && typeof dec === "string") return dec;
   } catch {
     /* plain text trigger */
   }

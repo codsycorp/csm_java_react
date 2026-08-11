@@ -6,7 +6,7 @@ import { ensureBrowserClientId, ensureTabSessionId } from "#src/utils/browser-cl
 import "#src/utils/chatHelpers"; // Import để expose chat helpers lên window
 
 // import { StrictMode } from "react";
-import { createRoot, hydrateRoot } from "react-dom/client";
+import { createRoot } from "react-dom/client";
 
 import App from "./app";
 import "./styles/index.css";
@@ -34,11 +34,6 @@ async function setupApp() {
 		</TanstackQuery>
 		// </StrictMode>
 	);
-
-	if (rootElement.hasChildNodes()) {
-		hydrateRoot(rootElement, app);
-		return;
-	}
 
 	const root = createRoot(rootElement);
 	root.render(app);

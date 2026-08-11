@@ -1148,6 +1148,7 @@ const SYSTEM_USER_VISIBLE_FIELDS_BY_ACTOR: Record<SystemUserActorType, string[]>
 		"phoneNumber",
 		"app_id",
 		"data_app_ids",
+		"account_expiry_days",
 		"pass",
 		"actived",
 	],
@@ -1164,6 +1165,7 @@ const SYSTEM_USER_VISIBLE_FIELDS_BY_ACTOR: Record<SystemUserActorType, string[]>
 		"menusPermissionsAdd",
 		"menusPermissionsDeny",
 		"dataScope",
+		"account_expiry_days",
 		"actived",
 	],
 	"sub-user": [
@@ -1179,6 +1181,7 @@ const SYSTEM_USER_VISIBLE_FIELDS_BY_ACTOR: Record<SystemUserActorType, string[]>
 		"menusPermissionsAdd",
 		"menusPermissionsDeny",
 		"dataScope",
+		"account_expiry_days",
 		"actived",
 	],
 };

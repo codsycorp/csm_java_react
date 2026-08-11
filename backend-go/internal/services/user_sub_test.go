@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"csm_server/backend-go/internal/config"
 	"csm_server/backend-go/internal/data"
@@ -114,6 +115,47 @@ func TestMapSubUserStripsAdminAndEnsuresView(t *testing.T) {
 	}
 	if user.ID == nil || *user.ID != subID {
 		t.Fatalf("expected sub-user id preserved, got %v", user.ID)
+	}
+}
+
+func TestMapSubUserUsesEarlierParentExpiry(t *testing.T) {
+	rm := newTempRecordManager(t)
+	parentID := "parent-expiry"
+	appID := "demo-expiry"
+	parentExpiry := time.Date(2035, 1, 1, 23, 59, 59, 0, time.UTC).UnixMilli()
+	childExpiry := time.Date(2035, 2, 1, 23, 59, 59, 0, time.UTC).UnixMilli()
+	parentToken := rm.CsmEncrypt(appID + "_____owner-expiry@test.com_____admin_____0")
+	_, err := rm.CreateRecord(CSMAppID, AccountsTable, map[string]any{
+		"id": parentID, "email": "owner-expiry@test.com", "username": "owner-expiry@test.com",
+		"app_id": appID, "app_token": parentToken, "permissions": []any{"admin"},
+		"account_expiry_at": parentExpiry,
+	}, []string{"id"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	subID := "sub-expiry"
+	_, err = rm.CreateRecord(CSMAppID, SubAccountsTable, map[string]any{
+		"id": subID, "parent_account_id": parentID, "login_identifier": "child-expiry@test.com",
+		"app_id": appID, "account_expiry_at": childExpiry,
+	}, []string{"id"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	us := NewUserService(rm)
+	user := us.mapSubUser(map[string]any{
+		"id": subID, "parent_account_id": parentID, "login_identifier": "child-expiry@test.com",
+		"app_id": appID, "account_expiry_at": childExpiry,
+	})
+	if user == nil {
+		t.Fatal("expected mapped sub-user")
+	}
+	if user.AccountExpiryAt == nil {
+		t.Fatal("expected sub-user expiry to be set")
+	}
+	if got := *user.AccountExpiryAt; got != parentExpiry {
+		t.Fatalf("expected parent expiry %d, got %d", parentExpiry, got)
 	}
 }
 

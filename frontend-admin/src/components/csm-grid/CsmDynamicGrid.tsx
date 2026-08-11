@@ -2479,10 +2479,7 @@ export function CsmDynamicGrid({
 			});
 		}
 		
-		let code = m_configs.trigger?.datacolumntemplate;
-		if (code && decrypt) {
-			try { code = decrypt(code); } catch {}
-		}
+		const code = resolveTriggerBody(m_configs.trigger?.datacolumntemplate, decrypt);
 		if (code) {
 			const fn = safeEval(["columns", "seft", "React"], code) as ((columns: ProColumns<Row>[], seft: any, React: any) => ProColumns<Row>[]) | null;
 			if (fn) {

@@ -18,14 +18,22 @@ export interface WebServiceMenu {
 export interface ServicePost {
   id: string;
   title: string;
+  title_en?: string;
+  title_zh?: string;
   slug: string;
   excerpt?: string;
+  excerpt_en?: string;
+  excerpt_zh?: string;
   content?: string;
+  content_en?: string;
+  content_zh?: string;
   thumbnail?: string;
   images?: string[];
   videos?: string[];
   serviceType?: string; // e.g. phan-mem, bat-dong-san, lam-dep-my-pham, cho-thue-xe, booking-online
   category?: string; // human readable category label
+  category_en?: string;
+  category_zh?: string;
   serviceId?: string; // FK to WebServiceMenu.id
   serviceCode?: string; // logical code if used (service_code)
   publishDate?: string;

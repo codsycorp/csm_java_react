@@ -486,6 +486,10 @@ function resolveBackendSSRBaseUrl(): string {
   if ((host === 'localhost' || host === '127.0.0.1') && (port === '3333' || port === '5173')) {
     return 'http://localhost:9999';
   }
+  const apiBase = import.meta.env.VITE_API_BASE_URL;
+  if (apiBase && apiBase !== '/' && apiBase !== '') {
+    return apiBase.replace(/\/api\/?$/, '');
+  }
   return window.location.origin;
 }
 

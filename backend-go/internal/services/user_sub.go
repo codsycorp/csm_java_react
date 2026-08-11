@@ -24,6 +24,11 @@ func (s *UserService) mapSubUser(record map[string]any) *model.User {
 	record = s.ensureSubUserCanonicalFields(record, parentRecord)
 
 	user := s.mapRecordToUser(parentRecord, false)
+	parentExpiryAt := model.AccountExpiryFromRecord(parentRecord)
+	childExpiryAt := model.AccountExpiryFromRecord(record)
+	if expiryAt := earliestAccountExpiry(parentExpiryAt, childExpiryAt); expiryAt > 0 {
+		user.AccountExpiryAt = model.Int64Ptr(expiryAt)
+	}
 	t := true
 	user.IsSubUser = &t
 	devFalse := false
@@ -34,9 +39,6 @@ func (s *UserService) mapSubUser(record map[string]any) *model.User {
 
 	if id, ok := record["id"].(string); ok && strings.TrimSpace(id) != "" {
 		user.ID = &id
-	}
-	if expiryAt := model.AccountExpiryFromRecord(record); expiryAt > 0 {
-		user.AccountExpiryAt = model.Int64Ptr(expiryAt)
 	}
 	if login, ok := record["login_identifier"].(string); ok && strings.TrimSpace(login) != "" {
 		user.Username = &login
@@ -291,6 +293,19 @@ func (s *UserService) mapSubUser(record map[string]any) *model.User {
 	user.DataScope = &dataScope
 
 	return &user
+}
+
+func earliestAccountExpiry(parentExpiryAt, childExpiryAt int64) int64 {
+	if parentExpiryAt <= 0 {
+		return childExpiryAt
+	}
+	if childExpiryAt <= 0 {
+		return parentExpiryAt
+	}
+	if parentExpiryAt < childExpiryAt {
+		return parentExpiryAt
+	}
+	return childExpiryAt
 }
 
 // ensureSubUserCanonicalFields mirrors Java UserService.ensureSubUserCanonicalFields.
