@@ -4025,6 +4025,7 @@
         dataMien: dataMien,
         fromDate: resolvedFromDate,
         toDate: resolvedToDate,
+        weekdayRefDate: String(cfg.weekdayRefDate || resolvedToDate || "").trim(),
         heThong: resolvedHeThong,
         fieldsLoc: resolveLegacyTongHopFieldLocList(cfg.queryValue),
         cachList: cachItems,
@@ -7333,14 +7334,15 @@
         return (("." + nd).indexOf(String(rightVal)) > 0);
       }
 
-      // Determine toDate weekday (same approach as PHP $Thu = weekday of $Den)
-      var toYmd = normalizeLegacyDateYmd(cfg.toDate);
+      // Keep data range and weekday anchor independent when callers must
+      // exclude Den Ngay rows but still use Den Ngay's weekday for Ky CX.
+      var weekdayRefYmd = normalizeLegacyDateYmd(cfg.weekdayRefDate || cfg.toDate);
       var targetDow = -1;
-      if (toYmd && toYmd.length >= 8) {
+      if (weekdayRefYmd && weekdayRefYmd.length >= 8) {
         targetDow = new Date(
-          parseInt(toYmd.substring(0,4),10),
-          parseInt(toYmd.substring(4,6),10)-1,
-          parseInt(toYmd.substring(6,8),10)
+          parseInt(weekdayRefYmd.substring(0,4),10),
+          parseInt(weekdayRefYmd.substring(4,6),10)-1,
+          parseInt(weekdayRefYmd.substring(6,8),10)
         ).getDay();
       }
 
@@ -12056,6 +12058,7 @@
         queryText: dd3Option.text,
         fromDate: rowDateRange.fromDate,
         toDate: rowDateRange.toDate,
+        weekdayRefDate: rowDateRange.weekdayRefDate,
         heThong: legacyHeThong
       };
 
@@ -12099,13 +12102,14 @@
       if (toYmd) {
         return {
           fromDate: CongNgay(calcTo, -4 * 365, "dd/mm/yyyy"),
-          toDate: calcTo
+          toDate: calcTo,
+          weekdayRefDate: globalTo || calcTo
         };
       }
 
       var fallbackFrom = String(tu_ngay || "").trim();
       var fallbackTo = calcTo;
-      return { fromDate: fallbackFrom, toDate: fallbackTo };
+      return { fromDate: fallbackFrom, toDate: fallbackTo, weekdayRefDate: globalTo || fallbackTo };
     }
 
     function buildLegacySlrAutoTongHopCachItemFromMetric(rec, metric, fallbackSearchText) {
@@ -12187,6 +12191,7 @@
             cachItems: cachItems,
             fromDate: dateRange.fromDate,
             toDate: dateRange.toDate,
+            weekdayRefDate: dateRange.weekdayRefDate,
             heThong: legacyHeThong
           });
           metric = Array.isArray(metrics) && metrics.length ? metrics[0] : null;
