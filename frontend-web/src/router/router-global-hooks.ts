@@ -11,45 +11,6 @@ import { goLogin } from "#src/utils/request/go-login";
 import { isDynamicRoutingEnabled } from "./routes/config";
 import { replaceBaseWithRoot } from "./utils";
 
-function parseAliasTags(raw: any): string[] {
-	if (Array.isArray(raw)) {
-		return raw.map((value) => String(value || '').trim()).filter(Boolean);
-	}
-	const text = String(raw || '').trim();
-	if (!text) return [];
-	try {
-		const parsed = JSON.parse(text);
-		if (Array.isArray(parsed)) {
-			return parsed.map((value) => String(value || '').trim()).filter(Boolean);
-		}
-	} catch {
-		// Fallback below.
-	}
-	return text
-		.split(/[\s,;|\[\]"]+/)
-		.map((value) => value.trim())
-		.filter(Boolean);
-}
-
-function resolveCanonicalPathFromCategories(pathname: string, categories: Array<any>): string | null {
-	const trimmed = pathname.replace(/^\/+|\/+$/g, '');
-	if (!trimmed) return null;
-	const parts = trimmed.split('/');
-	const alias = parts[0];
-	for (const cat of categories) {
-		if (!cat || typeof cat !== 'object') continue;
-		const slug = String(cat.slug || '').trim();
-		const serviceCode = String(cat.service_code || '').trim();
-		const aliases = new Set<string>([slug, serviceCode, ...parseAliasTags((cat as any).tags)]);
-		if (!aliases.has(alias)) continue;
-		const canonical = serviceCode || slug;
-		if (!canonical || canonical === alias) return null;
-		const suffix = parts.slice(1).join('/');
-		return `/${canonical}${suffix ? `/${suffix}` : ''}`;
-	}
-	return null;
-}
-
 // 不需要登录路由的路由白名单
 const baseNoLoginWhiteList = Array.from(ROUTE_WHITE_LIST).filter(item => item !== LOGIN);
 
@@ -232,11 +193,6 @@ export const routerBeforeEach: (reactRouter: ReactRouterType) => BlockerFunction
 	const isWebRoute = isWebsiteRoute(pathnameWithoutBase);
 
 	// Frontend web không dùng admin mode.
-	const canonicalPath = resolveCanonicalPathFromCategories(pathnameForChecks, (window.__SSR_WEBSITE_CATEGORIES__ as Array<any>) || []);
-	if (canonicalPath && canonicalPath !== pathnameForChecks) {
-		reactRouter.navigate(withWebsiteLangPrefix(canonicalPath, langPrefix), { replace: true });
-		return true;
-	}
 
 	// Bổ sung kiểm tra chi tiết dịch vụ: /:category/:slug (clean URLs, no .shtml)
 	// CHỈ validate category exists trong SSR, KHÔNG validate slug vì slug là dynamic từ database
