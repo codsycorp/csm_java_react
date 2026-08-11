@@ -1857,10 +1857,6 @@ func resolveServiceListing(
 		pageSize = n
 	}
 	lang := params["hl"]
-	if lang == "" {
-		lang = "vi"
-	}
-	lang = normalizeLangCode(lang)
 	lastKey := params["lastkey"]
 
 	pathNoExt := strings.ReplaceAll(path, ".shtml", "")
@@ -1872,6 +1868,19 @@ func resolveServiceListing(
 			segs = append(segs, strings.ToLower(s))
 		}
 	}
+	if len(segs) > 0 {
+		firstSeg := segs[0]
+		if firstSeg == "vi" || firstSeg == "en" || firstSeg == "zh" {
+			if strings.TrimSpace(lang) == "" {
+				lang = firstSeg
+			}
+			segs = segs[1:]
+		}
+	}
+	if strings.TrimSpace(lang) == "" {
+		lang = "vi"
+	}
+	lang = normalizeLangCode(lang)
 	isHome := len(segs) == 0
 	hasSingleSegmentCategory := false
 	if len(segs) == 1 && route.TblServices != "" {

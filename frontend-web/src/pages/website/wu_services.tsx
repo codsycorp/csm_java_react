@@ -447,7 +447,6 @@ const renderCardMedia = (post: ServicePost, categoryKey: string, altText: string
       src={src}
       loading="lazy"
       decoding="async"
-      fetchPriority="low"
       width={640}
       height={360}
       onError={(e) => { (e.currentTarget as HTMLImageElement).src = placeholder; }}

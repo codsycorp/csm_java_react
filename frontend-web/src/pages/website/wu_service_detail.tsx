@@ -2137,7 +2137,6 @@ export default function WuServiceDetail() {
                                   alt={relTitle}
                                   loading="lazy"
                                   decoding="async"
-                                  fetchPriority="low"
                                   width={640}
                                   height={360}
                                   onError={(e) => { (e.currentTarget as HTMLImageElement).src = svgPlaceholder(relTitle || 'CSM', 640, 360); }}
@@ -2172,7 +2171,6 @@ export default function WuServiceDetail() {
                                   alt={relTitle}
                                   loading="lazy"
                                   decoding="async"
-                                  fetchPriority="low"
                                   width={640}
                                   height={360}
                                   style={{ 
