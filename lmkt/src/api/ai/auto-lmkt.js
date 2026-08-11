@@ -873,6 +873,91 @@ if (typeof window !== 'undefined') {
       publish_date: new Date().toISOString(),
     };
 
+    const cleanupKqxsLandingServerData = async () => {
+      const cleanupStats = {
+        junkRowsUpdated: 0,
+        junkItemsRemoved: 0,
+        duplicateRowsDeleted: 0,
+        errors: [],
+      };
+
+      try {
+        const domainKey = resolveDomainKeyFromValue(domain) || 'csmbridge';
+
+        // Step 1: sanitize junk ListItem JSON-LD for lottery landing rows.
+        if (typeof cleanupLotteryMenuJunkData === 'function') {
+          const junkResult = await cleanupLotteryMenuJunkData(domain, {
+            app_id: appId,
+            helperApi: window.csmApi,
+            strictDomain: 'www.csmbridge.net',
+          });
+
+          cleanupStats.junkRowsUpdated = Number(junkResult?.deletedRows || 0);
+          cleanupStats.junkItemsRemoved = Number(junkResult?.removedItems || 0);
+          if (Array.isArray(junkResult?.errors) && junkResult.errors.length > 0) {
+            cleanupStats.errors.push(...junkResult.errors);
+          }
+        }
+
+        // Step 2: remove duplicate rows for the same slug, keep latest row.
+        if (typeof fetchTableRowsForDomainKey === 'function' && typeof window.csmApi?.updateTableData === 'function') {
+          const rows = await fetchTableRowsForDomainKey({
+            appId,
+            objName: 'web_service_detail',
+            domainKey,
+            scopeServiceType: kqxsLanding.service_type,
+            api: window.csmApi,
+          });
+
+          const candidates = (rows || []).filter((row) => String(row?.slug || '').trim() === kqxsLanding.slug);
+          if (candidates.length > 1) {
+            const sorted = [...candidates].sort((a, b) => {
+              const ta = new Date(a?.updated_at || a?.publish_date || 0).getTime() || 0;
+              const tb = new Date(b?.updated_at || b?.publish_date || 0).getTime() || 0;
+              return tb - ta;
+            });
+
+            const toDelete = sorted.slice(1);
+            for (const row of toDelete) {
+              const payload = {
+                app_id: appId,
+                obj_name: 'web_service_detail',
+                command: 'delete',
+                pk_fields: ['slug', 'domain', 'status'],
+                obj_update: {
+                  slug: row.slug,
+                  domain: row.domain,
+                  status: row.status || 'active',
+                },
+              };
+
+              try {
+                await window.csmApi.updateTableData(payload);
+                cleanupStats.duplicateRowsDeleted += 1;
+              } catch (deleteErr) {
+                cleanupStats.errors.push({
+                  obj: 'web_service_detail',
+                  action: 'delete-duplicate',
+                  slug: row.slug,
+                  domain: row.domain,
+                  error: String(deleteErr?.message || deleteErr),
+                });
+              }
+            }
+          }
+        }
+      } catch (cleanupErr) {
+        cleanupStats.errors.push({
+          obj: 'web_service_detail',
+          action: 'cleanup-kqxs-landing',
+          slug: kqxsLanding.slug,
+          error: String(cleanupErr?.message || cleanupErr),
+        });
+      }
+
+      return cleanupStats;
+    };
+
     const defaultHomepageSeoContent = `
       <article>
         <h1>Trang Chủ Thống Kê Dữ Liệu Kết Quả Xổ Số 3 Miền</h1>
@@ -991,6 +1076,17 @@ if (typeof window !== 'undefined') {
     };
 
     await migrateLegacyDichVuChildren();
+
+    if (options.cleanupKqxsLandingServer !== false) {
+      const cleanupStats = await cleanupKqxsLandingServerData();
+      if (cleanupStats.junkRowsUpdated > 0 || cleanupStats.junkItemsRemoved > 0 || cleanupStats.duplicateRowsDeleted > 0) {
+        console.log('[pushWebStructure4Menus] cleanup kqxsLanding', cleanupStats);
+      }
+      if (cleanupStats.errors.length > 0) {
+        stats.fail += cleanupStats.errors.length;
+        stats.failDetails.push(...cleanupStats.errors);
+      }
+    }
 
     for (const row of menuRows) {
       if (preserveLegacyServiceGrouping && legacyServiceSlugs.has(String(row.slug || ''))) {
@@ -4975,6 +5071,632 @@ async function cleanupBrokenFeaturedImagesByServiceType(domainValue, serviceType
       cleanedCount: 0
     };
   }
+}
+
+const LOTTERY_MENU_SLUG = "thong-ke-ket-qua-xo-so";
+const LOTTERY_ALLOWED_PATH_PREFIXES = [
+  "/thong-ke-ket-qua-xo-so"
+];
+const LOTTERY_JUNK_PATH_KEYWORDS = [
+  "/landing-ai-giam-sat-giao-thong-realtime"
+];
+
+function safeJsonParse(raw) {
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    return null;
+  }
+}
+
+function normalizeUrlPathForLottery(urlValue = "") {
+  const raw = String(urlValue || "").trim();
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw);
+    return String(parsed.pathname || "").trim().toLowerCase();
+  } catch (e) {
+    if (raw.startsWith("/")) return raw.toLowerCase();
+    return "";
+  }
+}
+
+function isListItemNode(node) {
+  return !!node && typeof node === "object" && String(node["@type"] || "").toLowerCase() === "listitem";
+}
+
+function shouldRemoveLotteryListItem(node) {
+  const articleUrl = String(node?.item?.url || "").trim();
+  const normalizedPath = normalizeUrlPathForLottery(articleUrl);
+  if (!normalizedPath) {
+    return true;
+  }
+
+  if (LOTTERY_JUNK_PATH_KEYWORDS.some((frag) => normalizedPath.includes(frag))) {
+    return true;
+  }
+
+  if (!LOTTERY_ALLOWED_PATH_PREFIXES.some((prefix) => normalizedPath.startsWith(prefix))) {
+    return true;
+  }
+
+  return false;
+}
+
+function sanitizeLotteryListItemArray(list = []) {
+  if (!Array.isArray(list) || list.length === 0) {
+    return { next: list, removed: 0, changed: false };
+  }
+
+  const hasListItem = list.some((entry) => isListItemNode(entry));
+  if (!hasListItem) {
+    return { next: list, removed: 0, changed: false };
+  }
+
+  let removed = 0;
+  const seen = new Set();
+  const kept = [];
+  let listItemPos = 1;
+
+  for (const entry of list) {
+    if (!isListItemNode(entry)) {
+      kept.push(entry);
+      continue;
+    }
+
+    if (shouldRemoveLotteryListItem(entry)) {
+      removed += 1;
+      continue;
+    }
+
+    const rawName = String(entry?.name || entry?.item?.name || "").trim().toLowerCase();
+    const rawUrl = String(entry?.item?.url || "").trim().toLowerCase();
+    const dedupeKey = `${rawName}@@${rawUrl}`;
+    if (seen.has(dedupeKey)) {
+      removed += 1;
+      continue;
+    }
+    seen.add(dedupeKey);
+
+    const nextEntry = {
+      ...entry,
+      position: listItemPos,
+      item: {
+        ...(entry.item || {}),
+        "@type": String(entry?.item?.["@type"] || "Article") || "Article"
+      }
+    };
+    kept.push(nextEntry);
+    listItemPos += 1;
+  }
+
+  const changed = removed > 0 || kept.length !== list.length;
+  return { next: kept, removed, changed };
+}
+
+function sanitizeLotteryJsonLdNode(node) {
+  if (Array.isArray(node)) {
+    const direct = sanitizeLotteryListItemArray(node);
+    if (direct.changed) {
+      return { next: direct.next, removed: direct.removed, changed: true };
+    }
+
+    let removed = 0;
+    let changed = false;
+    const next = node.map((item) => {
+      const nested = sanitizeLotteryJsonLdNode(item);
+      removed += nested.removed;
+      changed = changed || nested.changed;
+      return nested.next;
+    });
+    return { next, removed, changed };
+  }
+
+  if (node && typeof node === "object") {
+    let removed = 0;
+    let changed = false;
+    const out = { ...node };
+    for (const [k, v] of Object.entries(node)) {
+      const nested = sanitizeLotteryJsonLdNode(v);
+      removed += nested.removed;
+      if (nested.changed) {
+        changed = true;
+        out[k] = nested.next;
+      }
+    }
+    return { next: out, removed, changed };
+  }
+
+  return { next: node, removed: 0, changed: false };
+}
+
+function sanitizeLotteryJsonLdScriptInHtml(htmlText = "") {
+  const raw = String(htmlText || "");
+  if (!raw.includes("application/ld+json") || !raw.includes("ListItem")) {
+    return { text: raw, removed: 0, changed: false };
+  }
+
+  let removed = 0;
+  let changed = false;
+  const jsonLdScriptRegex = new RegExp('<script[^>]*type=["\\\']application/ld\\+json["\\\'][^>]*>([\\s\\S]*?)</script>', 'gi');
+  const replaced = raw.replace(jsonLdScriptRegex, (full, jsonBody) => {
+    const parsed = safeJsonParse(String(jsonBody || "").trim());
+    if (parsed == null) return full;
+
+    const sanitized = sanitizeLotteryJsonLdNode(parsed);
+    if (!sanitized.changed || sanitized.removed <= 0) {
+      return full;
+    }
+
+    removed += sanitized.removed;
+    changed = true;
+    const compactJson = JSON.stringify(sanitized.next, null, 2);
+    return full.replace(jsonBody, `\n${compactJson}\n`);
+  });
+
+  return { text: replaced, removed, changed };
+}
+
+function sanitizeLotteryJunkInFieldValue(value) {
+  if (value == null) return { next: value, removed: 0, changed: false };
+
+  if (typeof value === "string") {
+    const text = String(value);
+    const trimmed = text.trim();
+
+    if ((trimmed.startsWith("[") || trimmed.startsWith("{") || trimmed.startsWith('"[') || trimmed.startsWith('"{')) && trimmed.includes("ListItem")) {
+      const parsed = parseJsonWithFallbacks(trimmed);
+      if (parsed != null) {
+        const sanitized = sanitizeLotteryJsonLdNode(parsed);
+        if (sanitized.changed && sanitized.removed > 0) {
+          return {
+            next: JSON.stringify(sanitized.next, null, 2),
+            removed: sanitized.removed,
+            changed: true
+          };
+        }
+      }
+    }
+
+    if (text.includes("application/ld+json") && text.includes("ListItem")) {
+      return sanitizeLotteryJsonLdScriptInHtml(text);
+    }
+
+    return { next: value, removed: 0, changed: false };
+  }
+
+  if (typeof value === "object") {
+    const sanitized = sanitizeLotteryJsonLdNode(value);
+    return { next: sanitized.next, removed: sanitized.removed, changed: sanitized.changed };
+  }
+
+  return { next: value, removed: 0, changed: false };
+}
+
+function safeDecodeURIComponent(value = "") {
+  const raw = String(value || "");
+  if (!raw || !raw.includes("%")) return null;
+  try {
+    const decoded = decodeURIComponent(raw);
+    return decoded === raw ? null : decoded;
+  } catch (e) {
+    return null;
+  }
+}
+
+function decodeBasicHtmlEntities(text = "") {
+  return String(text || "")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#34;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&apos;/gi, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&amp;/gi, '&');
+}
+
+function parseJsonWithFallbacks(text = "") {
+  const raw = String(text || "").trim();
+  if (!raw) return null;
+
+  const candidates = [raw];
+  const uriDecoded = safeDecodeURIComponent(raw);
+  if (uriDecoded != null) candidates.push(uriDecoded);
+
+  const htmlDecoded = decodeBasicHtmlEntities(raw);
+  if (htmlDecoded !== raw) candidates.push(htmlDecoded);
+
+  if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {
+    const unquoted = raw.slice(1, -1);
+    const unescaped = unquoted
+      .replace(/\\"/g, '"')
+      .replace(/\\'/g, "'")
+      .replace(/\\n/g, "\n")
+      .replace(/\\r/g, "\r")
+      .replace(/\\t/g, "\t")
+      .replace(/\\\\/g, "\\");
+    candidates.push(unescaped);
+  }
+
+  for (const candidate of candidates) {
+    const parsed = safeJsonParse(candidate);
+    if (parsed != null) return parsed;
+  }
+  return null;
+}
+
+function rowContainsLotteryJunkMarker(row = {}) {
+  const markers = [
+    ...LOTTERY_JUNK_PATH_KEYWORDS,
+    "landing-ai-giam-sat-giao-thong-realtime"
+  ];
+
+  for (const [field, value] of Object.entries(row || {})) {
+    if (value == null) continue;
+    const text = String(value).toLowerCase();
+    if (!text) continue;
+    if (markers.some((m) => text.includes(String(m).toLowerCase()))) {
+      return { found: true, field };
+    }
+  }
+
+  return { found: false, field: "" };
+}
+
+function maybeDecryptString(value = "") {
+  const raw = String(value || "");
+  if (!raw) return { text: raw, encrypted: false };
+
+  try {
+    const crypto = getCryptoFunctions();
+    const decrypted = String(crypto.decrypt(raw) || "");
+    if (!decrypted || decrypted === raw) {
+      return { text: raw, encrypted: false };
+    }
+
+    // Heuristic: decrypted payload usually contains HTML/JSON markers.
+    const looksStructured = (
+      decrypted.includes("<")
+      || decrypted.includes("{")
+      || decrypted.includes("[")
+      || decrypted.includes("ListItem")
+      || decrypted.includes("application/ld+json")
+    );
+    if (!looksStructured) {
+      return { text: raw, encrypted: false };
+    }
+
+    return { text: decrypted, encrypted: true };
+  } catch (e) {
+    return { text: raw, encrypted: false };
+  }
+}
+
+function sanitizeLotteryFieldCryptoAware(fieldName, fieldValue) {
+  if (fieldValue == null || typeof fieldValue !== "string") {
+    return sanitizeLotteryJunkInFieldValue(fieldValue);
+  }
+
+  const raw = String(fieldValue);
+  const urlDecoded = safeDecodeURIComponent(raw);
+
+  const variants = [];
+  variants.push({
+    label: "raw",
+    sourceText: raw,
+    isUrlEncoded: false,
+  });
+
+  if (urlDecoded != null) {
+    variants.push({
+      label: "url-decoded",
+      sourceText: urlDecoded,
+      isUrlEncoded: true,
+    });
+  }
+
+  let best = { next: fieldValue, removed: 0, changed: false };
+
+  for (const variant of variants) {
+    const decrypted = maybeDecryptString(variant.sourceText);
+    const plain = decrypted.text;
+    const sanitized = sanitizeLotteryJunkInFieldValue(plain);
+    if (!sanitized.changed || sanitized.removed <= 0) continue;
+
+    let rebuilt = String(sanitized.next || "");
+    if (decrypted.encrypted) {
+      try {
+        rebuilt = String(getCryptoFunctions().encrypt(rebuilt));
+      } catch (e) {
+        continue;
+      }
+    }
+    if (variant.isUrlEncoded) {
+      rebuilt = encodeURIComponent(rebuilt);
+    }
+
+    if (sanitized.removed > best.removed) {
+      best = {
+        next: rebuilt,
+        removed: sanitized.removed,
+        changed: rebuilt !== raw,
+      };
+    }
+  }
+
+  // Fallback for plain values (non-encrypted/non-url-encoded)
+  if (best.removed <= 0) {
+    return sanitizeLotteryJunkInFieldValue(fieldValue);
+  }
+
+  return best;
+}
+
+function buildLotteryCleanupUpdatePayload(row, changedFields = {}, appId = "wuweb") {
+  return {
+    app_id: appId,
+    obj_name: "web_service_detail",
+    command: "update",
+    pk_fields: ["slug", "domain", "status"],
+    obj_update: {
+      slug: row.slug,
+      domain: row.domain,
+      status: row.status || "active",
+      updated_at: Date.now(),
+      ...changedFields
+    }
+  };
+}
+
+function buildLotteryCleanupDeletePayload(row, appId = "wuweb") {
+  const id = String(row?.id || "").trim();
+  if (id) {
+    return {
+      app_id: appId,
+      obj_name: "web_service_detail",
+      command: "delete",
+      pk_fields: ["id"],
+      obj_update: { id },
+      where: { field: "id", type: "eq", value: id }
+    };
+  }
+
+  const slug = String(row?.slug || "").trim();
+  const domain = String(row?.domain || "").trim();
+  const serviceType = String(row?.service_type || "").trim();
+  const status = String(row?.status || "").trim();
+
+  const conditions = [];
+  if (slug) conditions.push({ field: "slug", type: "eq", value: slug });
+  if (domain) conditions.push({ field: "domain", type: "eq", value: domain });
+  if (status) conditions.push({ field: "status", type: "eq", value: status });
+  if (serviceType) conditions.push({ field: "service_type", type: "eq", value: serviceType });
+
+  return {
+    app_id: appId,
+    obj_name: "web_service_detail",
+    command: "delete",
+    pk_fields: ["slug", "service_type", "domain", "status"],
+    obj_update: {
+      slug,
+      service_type: serviceType,
+      domain,
+      status
+    },
+    where: conditions.length > 1
+      ? { operator: "AND", conditions }
+      : (conditions[0] || undefined)
+  };
+}
+
+function buildLotteryCleanupDeleteFallbackPayloads(row, appId = "wuweb") {
+  const payloads = [];
+  const id = String(row?.id || "").trim();
+  const slug = String(row?.slug || "").trim();
+  const domain = String(row?.domain || "").trim();
+  const serviceType = String(row?.service_type || "").trim();
+  const status = String(row?.status || "").trim();
+
+  if (id) {
+    payloads.push({
+      app_id: appId,
+      obj_name: "web_service_detail",
+      command: "delete",
+      pk_fields: ["id"],
+      obj_update: { id },
+      where: { field: "id", type: "eq", value: id }
+    });
+  }
+
+  if (slug && domain && status) {
+    payloads.push({
+      app_id: appId,
+      obj_name: "web_service_detail",
+      command: "delete",
+      pk_fields: ["slug", "domain", "status"],
+      obj_update: { slug, domain, status },
+      where: {
+        operator: "AND",
+        conditions: [
+          { field: "slug", type: "eq", value: slug },
+          { field: "domain", type: "eq", value: domain },
+          { field: "status", type: "eq", value: status }
+        ]
+      }
+    });
+  }
+
+  if (slug && domain && serviceType) {
+    payloads.push({
+      app_id: appId,
+      obj_name: "web_service_detail",
+      command: "delete",
+      pk_fields: ["slug", "domain", "service_type"],
+      obj_update: { slug, domain, service_type: serviceType },
+      where: {
+        operator: "AND",
+        conditions: [
+          { field: "slug", type: "eq", value: slug },
+          { field: "domain", type: "eq", value: domain },
+          { field: "service_type", type: "eq", value: serviceType }
+        ]
+      }
+    });
+  }
+
+  return payloads;
+}
+
+async function cleanupLotteryMenuJunkData(domainValue, ctx = {}) {
+  const domainKey = resolveDomainKeyFromValue(domainValue) || "csmbridge";
+  const appId = DOMAIN_OPTIONS[domainKey]?.app_id || getAppIdFromDomainOptions(domainValue) || ctx.app_id || "wuweb";
+  const deleteAllFetchedRows = ctx.deleteAllFetchedRows === true;
+
+  const where = { field: "service_type", type: "eq", value: LOTTERY_MENU_SLUG };
+
+  console.log("[cleanupLotteryMenuJunkData] strict where", where);
+
+  const rows = await fetchAllTableRowsPaginated({
+    appId,
+    objName: "web_service_detail",
+    where,
+    api: ctx.helperApi || window.csmApi
+  });
+
+  const candidates = Array.isArray(rows) ? rows : [];
+  const stats = {
+    scanned: candidates.length,
+    matched: 0,
+    deletedRows: 0,
+    removedItems: 0,
+    fallbackDeletedRows: 0,
+    touchedFields: [],
+    errors: []
+  };
+
+  for (const row of candidates) {
+    const touched = [];
+    let removedInRow = 0;
+
+    const marker = rowContainsLotteryJunkMarker(row);
+    if (marker.found) {
+      removedInRow += 1;
+      touched.push(`marker:${marker.field}`);
+    }
+
+    for (const [field, fieldValue] of Object.entries(row || {})) {
+      if (field === "id" || field === "app_id" || field === "domain" || field === "slug" || field === "status") {
+        continue;
+      }
+
+      const sanitized = sanitizeLotteryFieldCryptoAware(field, fieldValue);
+      if (!sanitized.changed || sanitized.removed <= 0) continue;
+
+      removedInRow += sanitized.removed;
+      touched.push(field);
+    }
+
+    if (removedInRow <= 0) {
+      continue;
+    }
+
+    stats.matched += 1;
+    stats.removedItems += removedInRow;
+    stats.touchedFields.push({
+      id: row.id,
+      slug: row.slug,
+      domain: row.domain,
+      fields: touched,
+      removed: removedInRow
+    });
+
+    try {
+      const payloads = buildLotteryCleanupDeleteFallbackPayloads(row, appId);
+      if (payloads.length === 0) {
+        throw new Error("No valid delete key for row");
+      }
+
+      let deleted = false;
+      let lastErr = null;
+      for (const deletePayload of payloads) {
+        try {
+          const res = await withApiRetry(() => window.csmApi.updateTableData(deletePayload));
+          if (res && res.success === false) {
+            throw new Error(String(res.message || "Delete failed"));
+          }
+          deleted = true;
+          break;
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+
+      if (!deleted) {
+        throw lastErr || new Error("Delete failed for all payload strategies");
+      }
+
+      stats.deletedRows += 1;
+    } catch (error) {
+      stats.errors.push({
+        id: row.id,
+        slug: row.slug,
+        domain: row.domain,
+        error: String(error?.message || error)
+      });
+    }
+  }
+
+  // Fallback mode: when query found rows but detector matched none,
+  // delete exactly the fetched rows to avoid false negative cleanup results.
+  if (deleteAllFetchedRows && stats.scanned > 0 && stats.matched === 0) {
+    for (const row of candidates) {
+      try {
+        const payloads = buildLotteryCleanupDeleteFallbackPayloads(row, appId);
+        if (payloads.length === 0) {
+          throw new Error("No valid delete key for fallback row");
+        }
+
+        let deleted = false;
+        let lastErr = null;
+        for (const deletePayload of payloads) {
+          try {
+            const res = await withApiRetry(() => window.csmApi.updateTableData(deletePayload));
+            if (res && res.success === false) {
+              throw new Error(String(res.message || "Delete failed"));
+            }
+            deleted = true;
+            break;
+          } catch (err) {
+            lastErr = err;
+          }
+        }
+
+        if (!deleted) {
+          throw lastErr || new Error("Fallback delete failed for all payload strategies");
+        }
+
+        stats.deletedRows += 1;
+        stats.fallbackDeletedRows += 1;
+        stats.touchedFields.push({
+          id: row.id,
+          slug: row.slug,
+          domain: row.domain,
+          fields: ["fallback:deleteAllFetchedRows"],
+          removed: 1
+        });
+      } catch (error) {
+        stats.errors.push({
+          id: row.id,
+          slug: row.slug,
+          domain: row.domain,
+          error: String(error?.message || error),
+          phase: "fallback-delete-all"
+        });
+      }
+    }
+  }
+
+  return stats;
 }
 
 /**
@@ -12424,6 +13146,7 @@ async function ensureUI() {
   
   // ========== BUTTON: Dọn tin trùng theo dịch vụ/dự án ==========
   const cleanupDupBtn = createButton(ti("🧹 Dọn tin trùng", "🧹 Cleanup Duplicates", "🧹 清理重复"), "#ff7a45");
+  const cleanupLotteryJunkBtn = createButton(ti("🧽 Dọn tin rác KQXS", "🧽 Cleanup KQXS junk", "🧽 清理KQXS垃圾数据"), "#cf1322");
   const cleanupBrokenAvatarBtn = createButton(ti("🧹 Dọn tin lỗi ảnh đại diện", "🧹 Cleanup Broken Avatars", "🧹 清理头像异常"), "#d46b08");
   
   cleanupDupBtn.onclick = async () => {
@@ -12553,6 +13276,83 @@ async function ensureUI() {
     }
   };
 
+  cleanupLotteryJunkBtn.onclick = async () => {
+    const globalSettings = getGlobalSettings();
+    if (!globalSettings?.domain) {
+      return canhbao(ti(
+        "⚠️ Vui lòng chọn Domain ở Cài Đặt Chung",
+        "⚠️ Please select Domain in General Settings",
+        "⚠️ 请在常规设置中选择域名"
+      ));
+    }
+
+    const domainConfig = DOMAIN_OPTIONS[globalSettings.domainKey];
+    if (!domainConfig) {
+      return canhbao(ti(
+        "❌ Cấu hình Domain không hợp lệ",
+        "❌ Invalid Domain configuration",
+        "❌ 域名配置无效"
+      ));
+    }
+
+    const selectedDomain = domainConfig.value;
+    const ok = confirm(ti(
+      `🧽 Dọn tin rác JSON-LD trong menu Thống Kê Xổ số?\n\nDomain: ${selectedDomain}\n\nSẽ quét web_service_detail (slug = ${LOTTERY_MENU_SLUG}) và xóa ListItem sai luồng/URL rác, sau đó tự đánh lại position.\n\nXác nhận?`,
+      `🧽 Cleanup JSON-LD junk under Lottery menu?\n\nDomain: ${selectedDomain}\n\nThis scans web_service_detail (slug = ${LOTTERY_MENU_SLUG}), removes wrong-flow ListItem URLs, and reindexes positions.\n\nConfirm?`,
+      `🧽 清理彩票统计菜单中的 JSON-LD 垃圾数据？\n\n域名: ${selectedDomain}\n\n将扫描 web_service_detail（slug = ${LOTTERY_MENU_SLUG}），删除错误流向/异常 URL 的 ListItem，并重排 position。\n\n确认？`
+    ));
+    if (!ok) return;
+
+    cleanupLotteryJunkBtn.disabled = true;
+    cleanupLotteryJunkBtn.textContent = ti("⏳ Đang dọn...", "⏳ Cleaning...", "⏳ 清理中...");
+
+    try {
+      const ctx = resolveContext();
+      ctx.app_id = getAppIdFromDomainOptions(selectedDomain) || ctx.app_id || "wuweb";
+      ctx.domain = selectedDomain;
+      ctx.deleteAllFetchedRows = true;
+
+      const result = await cleanupLotteryMenuJunkData(selectedDomain, ctx);
+
+      if (result.errors.length > 0) {
+        canhbao(ti(
+          `⚠️ Dọn rác xong một phần. Match ${result.matched}/${result.scanned} bản ghi, đã xóa ${result.deletedRows} bản ghi rác. Lỗi: ${result.errors.length}`,
+          `⚠️ Partial cleanup done. Matched ${result.matched}/${result.scanned} rows, deleted ${result.deletedRows} junk rows. Errors: ${result.errors.length}`,
+          `⚠️ 已部分完成。匹配 ${result.matched}/${result.scanned} 条，已删除 ${result.deletedRows} 条垃圾数据。错误：${result.errors.length}`
+        ));
+      } else if (result.deletedRows > 0) {
+        thongbao(ti(
+          `✅ Đã dọn tin rác KQXS. Match ${result.matched} bản ghi, đã xóa ${result.deletedRows} bản ghi rác${result.fallbackDeletedRows > 0 ? ` (fallback theo rows query: ${result.fallbackDeletedRows})` : ""}.`,
+          `✅ KQXS junk cleanup complete. Matched ${result.matched} rows, deleted ${result.deletedRows} junk rows${result.fallbackDeletedRows > 0 ? ` (fallback delete from fetched rows: ${result.fallbackDeletedRows})` : ""}.`,
+          `✅ KQXS 垃圾清理完成。匹配 ${result.matched} 条，删除 ${result.deletedRows} 条垃圾数据${result.fallbackDeletedRows > 0 ? `（按查询结果回退删除：${result.fallbackDeletedRows}）` : ""}。`
+        ));
+      } else {
+        thongbao(ti(
+          "✅ Không phát hiện tin rác cần dọn trong menu Thống Kê Xổ số.",
+          "✅ No junk ListItem data found in Lottery menu.",
+          "✅ 未发现需要清理的彩票菜单垃圾数据。"
+        ));
+      }
+
+      if (result.touchedFields.length > 0) {
+        console.table(result.touchedFields);
+      }
+      if (result.errors.length > 0) {
+        console.error("[cleanupLotteryMenuJunkData] errors", result.errors);
+      }
+    } catch (error) {
+      console.error("[cleanupLotteryJunkBtn] Error:", error);
+      canhbao(ti(
+        `❌ Lỗi dọn tin rác: ${error.message}`,
+        `❌ Cleanup failed: ${error.message}`,
+        `❌ 清理失败：${error.message}`
+      ));
+    } finally {
+      cleanupLotteryJunkBtn.disabled = false;
+      cleanupLotteryJunkBtn.textContent = ti("🧽 Dọn tin rác KQXS", "🧽 Cleanup KQXS junk", "🧽 清理KQXS垃圾数据");
+    }
+  };
+
   cleanupBrokenAvatarBtn.onclick = async () => {
     const globalSettings = getGlobalSettings();
     const isLmkt = globalSettings.domainKey === "lmkt";
@@ -12657,7 +13457,7 @@ async function ensureUI() {
   };
 
   const actionButtons = [uploadZaloBtn, uploadFbBtn, createBtn, clearHistoryBtn];
-  actionButtons.push(cleanupDupBtn, cleanupBrokenAvatarBtn);
+  actionButtons.push(cleanupDupBtn, cleanupLotteryJunkBtn, cleanupBrokenAvatarBtn);
   btnRow.append(...actionButtons);
   wrapper.append(title, note, textarea, btnRow, zaloFileInput, fbFileInput);
 

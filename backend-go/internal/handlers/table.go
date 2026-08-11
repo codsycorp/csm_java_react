@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"csm_server/backend-go/internal/cacheepoch"
 	"csm_server/backend-go/internal/config"
 	"csm_server/backend-go/internal/data"
 	"csm_server/backend-go/internal/model"
@@ -390,6 +391,7 @@ func (h *TableHandler) handleUpdateOperation(out map[string]any, params map[stri
 			out["command"] = "delete"
 			out["message"] = "Record deleted"
 			out["updated_row"] = target
+			cacheepoch.BumpSSRContentEpochForTable(table)
 			h.emitSocketUpdate(appID, table, "delete", target)
 			return out
 		}
@@ -482,6 +484,7 @@ func (h *TableHandler) handleUpdateOperation(out map[string]any, params map[stri
 	if cleanup := h.autoCleanupContentRows(appID, table, finalObj, action); len(cleanup) > 0 {
 		out["dedupe_cleanup"] = cleanup
 	}
+	cacheepoch.BumpSSRContentEpochForTable(table)
 	h.emitSocketUpdate(appID, table, action, finalObj)
 	h.captureLearningFromSavedRow(appID, table, action, finalObj)
 	return out

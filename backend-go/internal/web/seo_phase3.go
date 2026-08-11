@@ -388,7 +388,7 @@ func buildPrimaryJSONLD(ctx *preprocessCtx) map[string]any {
 	}
 
 	pageSchemaType := "WebPage"
-	if hasServiceList(ctx.InitialData) {
+	if hasServiceList(ctx) {
 		pageSchemaType = "CollectionPage"
 	}
 
@@ -418,12 +418,16 @@ func buildPrimaryJSONLD(ctx *preprocessCtx) map[string]any {
 	}
 }
 
-func hasServiceList(initialData map[string]any) bool {
-	if initialData == nil {
+func hasServiceList(ctx *preprocessCtx) bool {
+	if ctx == nil || ctx.InitialData == nil {
 		return false
 	}
-	rows, ok := initialData["serviceDetailList"].([]any)
-	return ok && len(rows) > 0
+	rows, ok := ctx.InitialData["serviceDetailList"].([]any)
+	if !ok || len(rows) == 0 {
+		return false
+	}
+	filtered := filterListingRowsForSEO(ctx.InitialData, rows, hostFromBaseURL(ctx.BaseURL))
+	return len(filtered) > 0
 }
 
 func buildItemListJSONLD(ctx *preprocessCtx) map[string]any {
@@ -432,6 +436,10 @@ func buildItemListJSONLD(ctx *preprocessCtx) map[string]any {
 	}
 	rows, ok := ctx.InitialData["serviceDetailList"].([]any)
 	if !ok || len(rows) == 0 {
+		return nil
+	}
+	rows = filterListingRowsForSEO(ctx.InitialData, rows, hostFromBaseURL(ctx.BaseURL))
+	if len(rows) == 0 {
 		return nil
 	}
 

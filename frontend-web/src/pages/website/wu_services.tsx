@@ -135,6 +135,23 @@ const sanitizeHtmlForRender = (html?: string): string => {
   }
 };
 
+const stripHtmlToText = (html?: string): string => {
+  if (!html) return '';
+  return String(html).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+};
+
+const pickRenderableHtml = (...candidates: Array<string | undefined | null>): string => {
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const decoded = decodeHtml(candidate) || String(candidate);
+    const sanitized = sanitizeHtmlForRender(decoded);
+    if (stripHtmlToText(sanitized).length > 0) {
+      return sanitized;
+    }
+  }
+  return '';
+};
+
 // Helper functions to get translated property types and transaction types
 const getTranslatedPropertyTypes = (t: any): string[] => {
   return [
@@ -1270,20 +1287,38 @@ const WuServicesPage: React.FC = () => {
       ? String(getMultilingualField(landingPost, 'content', langCode) || landingPost.content || '').trim()
       : '';
 
-    const fromMeta = String(
-      getHeaderMeta(categoryKey)?.content
-      || (categoryKey === (slug || '') ? (initialReactData?.pageContent || '') : '')
-      || ''
+    const fromPageContent = String(
+      categoryKey === (slug || '')
+        ? (initialReactData?.pageContent || '')
+        : ''
     ).trim();
+
+    const fromServiceCategoryDirect = String(
+      categoryKey === (slug || '')
+        ? (
+            langCode === 'en'
+              ? (initialReactData?.serviceCategory?.content_en || initialReactData?.serviceCategory?.content || '')
+              : langCode === 'zh'
+                ? (initialReactData?.serviceCategory?.content_zh || initialReactData?.serviceCategory?.content || '')
+                : (initialReactData?.serviceCategory?.content || '')
+          )
+        : ''
+    ).trim();
+
+    const fromMeta = String(getHeaderMeta(categoryKey)?.content || '').trim();
 
     // Lottery landing is managed by uploaded content entries, so prefer post content over category CMS text.
     if (categoryKey === 'thong-ke-ket-qua-xo-so') {
       if (fromPost) return fromPost;
+      if (fromPageContent) return fromPageContent;
+      if (fromServiceCategoryDirect) return fromServiceCategoryDirect;
       if (fromMeta) return fromMeta;
       return DEFAULT_KQXS_LANDING_CONTENT[langCode];
     }
 
     if (fromMeta) return fromMeta;
+    if (fromPageContent) return fromPageContent;
+    if (fromServiceCategoryDirect) return fromServiceCategoryDirect;
     if (fromPost) return fromPost;
 
     return '';
@@ -2879,7 +2914,7 @@ const WuServicesPage: React.FC = () => {
               <Paragraph style={{ fontSize: 17, color: 'var(--text-secondary)', margin: '8px 0 0 0' }}>{desc}</Paragraph>
               
               {/* 🎯 SEO OPTIMIZATION: Render category content for better indexing */}
-              {content && (
+              {pickRenderableHtml(content) && (
                 <div 
                   style={{ 
                     marginTop: 16,
@@ -2893,7 +2928,7 @@ const WuServicesPage: React.FC = () => {
                     color: 'var(--text-primary)'
                   }}
                   className="category-content-intro"
-                  dangerouslySetInnerHTML={{ __html: sanitizeHtmlForRender(decodeHtml(content) || '') }}
+                  dangerouslySetInnerHTML={{ __html: pickRenderableHtml(content) }}
                 />
               )}
 
@@ -2988,6 +3023,17 @@ const WuServicesPage: React.FC = () => {
     const lotteryTitle = lotteryMeta.title || t('website.menu.lottery_statistics', 'Thống Kê Kết Quả Xổ Số');
     const lotteryDesc = lotteryMeta.description || t('website.services.lottery.description', 'Thống kê và tổng hợp dữ liệu kết quả xổ số theo ngày, đài và miền.');
     const lotteryContent = resolveCategoryLandingContent(lotteryKey);
+    const lotteryRenderableContent = pickRenderableHtml(
+      lotteryContent,
+      initialReactData?.pageContent,
+      currentLangCode === 'en'
+        ? (initialReactData?.serviceCategory?.content_en || initialReactData?.serviceCategory?.content)
+        : currentLangCode === 'zh'
+          ? (initialReactData?.serviceCategory?.content_zh || initialReactData?.serviceCategory?.content)
+          : initialReactData?.serviceCategory?.content,
+      DEFAULT_KQXS_LANDING_CONTENT[currentLangCode],
+      DEFAULT_KQXS_LANDING_CONTENT.vi
+    );
 
     return (
       <WebsiteLayout menuItems={menuItems} selectedKey={selectedMenuKey}>
@@ -3004,7 +3050,7 @@ const WuServicesPage: React.FC = () => {
               <article
                 className="category-content-intro"
                 style={{ fontSize: 16, lineHeight: 1.85, color: 'var(--text-primary)' }}
-                dangerouslySetInnerHTML={{ __html: sanitizeHtmlForRender(decodeHtml(lotteryContent) || '') }}
+                dangerouslySetInnerHTML={{ __html: lotteryRenderableContent }}
               />
             </div>
           </section>

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"csm_server/backend-go/internal/cacheepoch"
 	"csm_server/backend-go/internal/data"
 	"csm_server/backend-go/internal/model"
 )
@@ -61,6 +62,58 @@ type sitemapCacheEntry struct {
 }
 
 var sitemapCache sync.Map
+
+var ssrMutationInvalidateTables = map[string]struct{}{
+	"web_service_detail": {},
+	"web_services":       {},
+}
+
+func clearSyncMap(sm *sync.Map) {
+	sm.Range(func(key, _ any) bool {
+		sm.Delete(key)
+		return true
+	})
+}
+
+func clearSyncMapByKeyContains(sm *sync.Map, needle string) {
+	needle = strings.TrimSpace(strings.ToLower(needle))
+	if needle == "" {
+		clearSyncMap(sm)
+		return
+	}
+	sm.Range(func(key, _ any) bool {
+		ks, _ := key.(string)
+		if strings.Contains(strings.ToLower(ks), needle) {
+			sm.Delete(key)
+		}
+		return true
+	})
+}
+
+// InvalidateSSRCacheOnTableMutation purges SEO-sensitive SSR caches after table writes.
+// It targets domain keys when possible; otherwise falls back to full purge for correctness.
+func InvalidateSSRCacheOnTableMutation(table string, row map[string]any) {
+	tbl := strings.ToLower(strings.TrimSpace(table))
+	if _, ok := ssrMutationInvalidateTables[tbl]; !ok {
+		return
+	}
+
+	domain := strings.TrimSpace(recordStr(row, "domain"))
+	if strings.HasPrefix(strings.ToLower(domain), "www.") {
+		domain = strings.TrimPrefix(strings.ToLower(domain), "www.")
+	}
+
+	if domain == "" {
+		clearSyncMap(&ssrCache)
+		clearSyncMap(&ssrCategoryCache)
+		clearSyncMap(&sitemapCache)
+		return
+	}
+
+	clearSyncMapByKeyContains(&ssrCache, domain)
+	clearSyncMapByKeyContains(&ssrCategoryCache, domain)
+	clearSyncMapByKeyContains(&sitemapCache, domain)
+}
 
 const sitemapCacheTTL = 5 * time.Minute
 
@@ -152,7 +205,8 @@ func RenderPage(ctx SSRContext, uri, host, queryStr string, includeVisibleBody b
 	if hostKey == "" {
 		hostKey = "default"
 	}
-	cacheKey := hostKey + ":" + uri
+	epoch := cacheepoch.CurrentSSRContentEpoch()
+	cacheKey := hostKey + ":" + uri + ":e=" + fmt.Sprint(epoch)
 	if includeVisibleBody {
 		cacheKey += ":visible=1"
 	} else {

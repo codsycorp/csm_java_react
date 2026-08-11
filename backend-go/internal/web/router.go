@@ -5,8 +5,10 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 
+	"csm_server/backend-go/internal/cacheepoch"
 	"csm_server/backend-go/internal/model"
 	"csm_server/backend-go/internal/state"
 )
@@ -412,6 +414,7 @@ func HandleWebPath(st *state.AppState, w http.ResponseWriter, r *http.Request, u
 	if shouldNoIndexSSRQuery(parseQS(query)) {
 		w.Header().Set("X-Robots-Tag", "noindex,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1")
 	}
+	setSSREpochHeader(w)
 	w.Header().Add("Vary", "User-Agent")
 	html := RenderPage(ctx, uri, host, query, injectVisibleBody)
 	writeTextCached(w, http.StatusOK, "text/html; charset=utf-8", html, "public, max-age=60, stale-while-revalidate=300, stale-if-error=600")
@@ -437,7 +440,12 @@ func ServeSSR(st *state.AppState, w http.ResponseWriter, r *http.Request, uri, h
 	if shouldNoIndexSSRQuery(parseQS(query)) {
 		w.Header().Set("X-Robots-Tag", "noindex,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1")
 	}
+	setSSREpochHeader(w)
 	w.Header().Add("Vary", "User-Agent")
 	html := RenderPage(ctx, uri, host, query, injectVisibleBody)
 	writeTextCached(w, http.StatusOK, "text/html; charset=utf-8", html, "public, max-age=60, stale-while-revalidate=300, stale-if-error=600")
+}
+
+func setSSREpochHeader(w http.ResponseWriter) {
+	w.Header().Set("X-SSR-Epoch", strconv.FormatUint(cacheepoch.CurrentSSRContentEpoch(), 10))
 }

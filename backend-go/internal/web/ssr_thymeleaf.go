@@ -213,8 +213,21 @@ func enrichInitialData(initialData map[string]any, listing map[string]any, proto
 	for k, v := range listing {
 		initialData[k] = v
 	}
-	if raw, ok := listing["serviceDetailList"].([]any); ok && len(raw) > 0 {
-		svcType, _ := listing["service_type"].(string)
-		initialData["itemListElements"] = buildItemListElements(raw, protocol, host, svcType)
+	raw, ok := listing["serviceDetailList"].([]any)
+	if !ok || len(raw) == 0 {
+		delete(initialData, "itemListElements")
+		return
+	}
+	filtered := filterListingRowsForSEO(listing, raw, host)
+	if len(filtered) == 0 {
+		delete(initialData, "itemListElements")
+		return
+	}
+	svcType := resolveListingServiceType(listing)
+	initialData["itemListElements"] = buildItemListElements(filtered, protocol, host, svcType)
+	if len(filtered) != len(raw) {
+		initialData["serviceDetailListSEO"] = filtered
+	} else {
+		delete(initialData, "serviceDetailListSEO")
 	}
 }
