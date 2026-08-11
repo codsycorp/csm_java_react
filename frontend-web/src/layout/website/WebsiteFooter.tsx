@@ -29,6 +29,29 @@ export default function WebsiteFooter() {
   const location = useLocation();
   const currentYear = new Date().getFullYear();
 
+  const resolveSupportedLang = (raw?: string | null): 'vi' | 'en' | 'zh' => {
+    const norm = String(raw || '').trim().toLowerCase();
+    if (norm.startsWith('en')) return 'en';
+    if (norm.startsWith('zh')) return 'zh';
+    return 'vi';
+  };
+
+  const resolveLangFromPathname = (pathname: string): 'vi' | 'en' | 'zh' => {
+    const first = String(pathname || '').trim().split('/').filter(Boolean)[0] || '';
+    return resolveSupportedLang(first);
+  };
+
+  const currentLang = resolveSupportedLang(i18n.language || resolveLangFromPathname(location.pathname));
+
+  const localizePath = (path: string): string => {
+    const normalized = (path.startsWith('/') ? path : `/${path}`).replace(/\/+/g, '/');
+    const withoutLangPrefix = normalized.replace(/^\/(vi|en|zh)(?=\/|$)/i, '') || '/';
+    const basePath = withoutLangPrefix.startsWith('/') ? withoutLangPrefix : `/${withoutLangPrefix}`;
+    if (currentLang === 'vi') return basePath;
+    if (basePath === '/') return `/${currentLang}`;
+    return `/${currentLang}${basePath}`;
+  };
+
   // Replace {{year}} in translation with current year
   const copyrightText = t("website.footer.copyright").replace("{{year}}", currentYear.toString());
 
@@ -132,7 +155,7 @@ function isSSRGroupCategory(cat: any): cat is {
               <ul className={styles.footerLinks} style={{ width: "100%", textAlign: "right", paddingRight: 0 }}>
                 {serviceCategories.map((cat) => (
                   <li key={cat.slug}>
-                    <a href={cat.path} style={{ color: cat.color }}>
+                    <a href={localizePath(cat.path)} style={{ color: cat.color }}>
                       <span style={{ fontSize: 20, display: "inline-flex", alignItems: "center" }}>{cat.icon}</span>
                       <span>{cat.category}</span>
                     </a>
@@ -148,9 +171,9 @@ function isSSRGroupCategory(cat: any): cat is {
             {copyrightText}
           </div>
           <div style={{ display: "flex", gap: 18, flexWrap: "wrap", justifyContent: "center" }}>
-            <a href="/privacy-policy" style={{ color: "inherit", textDecoration: "underline", borderRadius: 6, padding: "2px 8px" }}>{t("website.footer.privacy", "Chính Sách Bảo Mật")}</a>
-            <a href="/terms-of-service" style={{ color: "inherit", textDecoration: "underline", borderRadius: 6, padding: "2px 8px" }}>{t("website.footer.terms", "Điều Khoản Sử Dụng")}</a>
-            <a href="/ve-chung-toi" style={{ color: "inherit", textDecoration: "underline", borderRadius: 6, padding: "2px 8px" }}>{t("website.footer.about", "Về Chúng Tôi")}</a>
+            <a href={localizePath('/privacy-policy')} style={{ color: "inherit", textDecoration: "underline", borderRadius: 6, padding: "2px 8px" }}>{t("website.footer.privacy", "Chính Sách Bảo Mật")}</a>
+            <a href={localizePath('/terms-of-service')} style={{ color: "inherit", textDecoration: "underline", borderRadius: 6, padding: "2px 8px" }}>{t("website.footer.terms", "Điều Khoản Sử Dụng")}</a>
+            <a href={localizePath('/ve-chung-toi')} style={{ color: "inherit", textDecoration: "underline", borderRadius: 6, padding: "2px 8px" }}>{t("website.footer.about", "Về Chúng Tôi")}</a>
           </div>
         </div>
       </div>
