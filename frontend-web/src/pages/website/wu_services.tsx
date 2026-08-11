@@ -45,6 +45,11 @@ import {
 
 import WebsiteLayout from "#src/layout/website/WebsiteLayout";
 import { useWebsiteMenu } from "#src/layout/website/wu_menu";
+import {
+  normalizeSeoRouteKey,
+  resolveCategoryMeta,
+  resolveRouteCategoryKey,
+} from "./seoRouteData";
 // Import ServicePost type from API instead of defining local type
 import { 
   getRelativeTime, 
@@ -1288,13 +1293,13 @@ const WuServicesPage: React.FC = () => {
       : '';
 
     const fromPageContent = String(
-      categoryKey === (slug || '')
+      categoryKey === (effectiveSlug || '')
         ? (initialReactData?.pageContent || '')
         : ''
     ).trim();
 
     const fromServiceCategoryDirect = String(
-      categoryKey === (slug || '')
+      categoryKey === (effectiveSlug || '')
         ? (
             langCode === 'en'
               ? (initialReactData?.serviceCategory?.content_en || initialReactData?.serviceCategory?.content || '')
@@ -1307,8 +1312,16 @@ const WuServicesPage: React.FC = () => {
 
     const fromMeta = String(getHeaderMeta(categoryKey)?.content || '').trim();
 
-    // Lottery landing is managed by uploaded content entries, so prefer post content over category CMS text.
-    if (categoryKey === 'thong-ke-ket-qua-xo-so') {
+    // Special SEO landing pages should be resolved from category metadata, not hardcoded route names.
+    const lotteryMetaTitle = String(getHeaderMeta(categoryKey)?.title || '').trim().toLowerCase();
+    const isLotteryCategory =
+      categoryKey.toLowerCase().includes('xo-so') ||
+      categoryKey.toLowerCase().includes('lottery') ||
+      lotteryMetaTitle.includes('xo so') ||
+      lotteryMetaTitle.includes('lottery') ||
+      lotteryMetaTitle.includes('xổ số');
+
+    if (isLotteryCategory) {
       if (fromPost) return fromPost;
       if (fromPageContent) return fromPageContent;
       if (fromServiceCategoryDirect) return fromServiceCategoryDirect;
@@ -1588,6 +1601,14 @@ const WuServicesPage: React.FC = () => {
   const pathnameWithoutBase = useMemo(() => stripBasePathname(location.pathname), [location.pathname]);
   const { lang, slug: rawSlug } = extractLangAndSlug(pathnameWithoutBase);
   const slug = String(rawSlug || '').replace(/^\/+|\/+$/g, '');
+  const ssrPathSlug = useMemo(() => {
+    const rawPath = String(initialReactData?.currentPagePath || '').trim();
+    if (!rawPath) return '';
+    const noQuery = rawPath.split('?')[0] || '';
+    const { slug: derived } = extractLangAndSlug(noQuery);
+    return String(derived || '').replace(/^\/+|\/+$/g, '');
+  }, [initialReactData?.currentPagePath]);
+  const effectiveSlug = slug || ssrPathSlug;
   const bridgeChildSlugSet = useMemo(() => {
     const slugs = new Set<string>([
       'phan-mem',
@@ -1607,9 +1628,30 @@ const WuServicesPage: React.FC = () => {
 
     return slugs;
   }, [menuItems]);
-  const isLotteryLandingRoute = slug === 'thong-ke-ket-qua-xo-so';
-  const isBridgeLandingRoute = slug === 'hop-tac-kinh-doanh';
-  const isBridgeChildRoute = Boolean(slug && bridgeChildSlugSet.has(slug));
+
+  const resolvedSeoCategoryKey = useMemo(
+    () => resolveRouteCategoryKey(effectiveSlug || activeTabKey || DEFAULT_CATEGORY, allCategories, DEFAULT_CATEGORY),
+    [effectiveSlug, activeTabKey, allCategories]
+  );
+
+  const resolvedSeoCategory = useMemo(
+    () => resolveCategoryMeta(resolvedSeoCategoryKey, allCategories, currentLangCode),
+    [resolvedSeoCategoryKey, allCategories, currentLangCode]
+  );
+
+  const isLotteryLandingRoute = Boolean(effectiveSlug) && Boolean(resolvedSeoCategory) && (
+    normalizeSeoRouteKey(resolvedSeoCategory?.key) === normalizeSeoRouteKey(effectiveSlug) &&
+    (String(resolvedSeoCategory?.title || '').toLowerCase().includes('xổ số') ||
+      String(resolvedSeoCategory?.title || '').toLowerCase().includes('lottery') ||
+      String(resolvedSeoCategory?.title || '').toLowerCase().includes('xo so'))
+  );
+  const isBridgeLandingRoute = Boolean(effectiveSlug) && Boolean(resolvedSeoCategory) && (
+    normalizeSeoRouteKey(resolvedSeoCategory?.key) === normalizeSeoRouteKey(effectiveSlug) &&
+    (String(resolvedSeoCategory?.title || '').toLowerCase().includes('hợp tác') ||
+      String(resolvedSeoCategory?.title || '').toLowerCase().includes('business partnership') ||
+      String(resolvedSeoCategory?.title || '').toLowerCase().includes('partnership'))
+  );
+  const isBridgeChildRoute = Boolean(effectiveSlug && bridgeChildSlugSet.has(effectiveSlug));
   const isBridgeContextStored = useMemo(() => {
     if (typeof window === 'undefined') return false;
     try {
@@ -1639,9 +1681,16 @@ const WuServicesPage: React.FC = () => {
     if (!isBridgeContext) {
       return allCategories;
     }
-    return allCategories.filter(
-      (cat) => cat.key !== 'thong-ke-ket-qua-xo-so' && cat.key !== 'hop-tac-kinh-doanh',
-    );
+    return allCategories.filter((cat) => {
+      const title = String(cat.title || '').toLowerCase();
+      return !(
+        title.includes('xổ số') ||
+        title.includes('lottery') ||
+        title.includes('hợp tác') ||
+        title.includes('business partnership') ||
+        title.includes('partnership')
+      );
+    });
   }, [allCategories, isBridgeContext]);
 
   // Check if we're on a group route (e.g., /du-an accessed directly)
@@ -3014,14 +3063,14 @@ const WuServicesPage: React.FC = () => {
   // Xác định selectedKey cho menu/submenu (clean URLs)
   const selectedMenuKey = isBridgeLandingRoute
     ? '/hop-tac-kinh-doanh'
-    : (slug ? `/${slug}` : (activeTabKey ? `/${activeTabKey}` : `/${DEFAULT_CATEGORY}`));
+    : (effectiveSlug ? `/${effectiveSlug}` : (activeTabKey ? `/${activeTabKey}` : `/${DEFAULT_CATEGORY}`));
 
   if (isLotteryLandingRoute) {
-    const lotteryKey = 'thong-ke-ket-qua-xo-so';
+    const lotteryKey = resolvedSeoCategory?.key || resolvedSeoCategoryKey;
     const lotteryMeta = getHeaderMeta(lotteryKey);
-    const lotteryColor = lotteryMeta.color || '#722ed1';
-    const lotteryTitle = lotteryMeta.title || t('website.menu.lottery_statistics', 'Thống Kê Kết Quả Xổ Số');
-    const lotteryDesc = lotteryMeta.description || t('website.services.lottery.description', 'Thống kê và tổng hợp dữ liệu kết quả xổ số theo ngày, đài và miền.');
+    const lotteryColor = lotteryMeta.color || resolvedSeoCategory?.color || '#722ed1';
+    const lotteryTitle = lotteryMeta.title || resolvedSeoCategory?.title || t('website.menu.lottery_statistics', 'Thống Kê Kết Quả Xổ Số');
+    const lotteryDesc = lotteryMeta.description || resolvedSeoCategory?.description || t('website.services.lottery.description', 'Thống kê và tổng hợp dữ liệu kết quả xổ số theo ngày, đài và miền.');
     const lotteryContent = resolveCategoryLandingContent(lotteryKey);
     const lotteryRenderableContent = pickRenderableHtml(
       lotteryContent,
@@ -3031,7 +3080,7 @@ const WuServicesPage: React.FC = () => {
         : currentLangCode === 'zh'
           ? (initialReactData?.serviceCategory?.content_zh || initialReactData?.serviceCategory?.content)
           : initialReactData?.serviceCategory?.content,
-      DEFAULT_KQXS_LANDING_CONTENT[currentLangCode],
+      resolvedSeoCategory?.content || DEFAULT_KQXS_LANDING_CONTENT[currentLangCode],
       DEFAULT_KQXS_LANDING_CONTENT.vi
     );
 
