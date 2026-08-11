@@ -22,7 +22,6 @@ import {
 import styles from "./websiteLayout.module.css";
 import logo from "#src/assets/svg/logo.svg?url";
 import i18n from "i18next";
-import { getDefaultCategorySlug } from "#src/utils/getDefaultCategorySlug";
 
 export default function WebsiteFooter() {
   const { t } = useTranslation();
@@ -57,7 +56,16 @@ export default function WebsiteFooter() {
     return undefined;
   };
 
-  const currentLang = detectLangFromPathname(location.pathname) || resolveSupportedLang(i18n.language);
+  const detectLangFromSearch = (search: string): 'vi' | 'en' | 'zh' | undefined => {
+    const raw = new URLSearchParams(search || '').get('hl');
+    if (!raw) return undefined;
+    const lang = resolveSupportedLang(raw);
+    return lang;
+  };
+
+  const currentLang = detectLangFromSearch(location.search)
+    || detectLangFromPathname(location.pathname)
+    || resolveSupportedLang(i18n.language);
 
   const localizePath = (path: string): string => {
     const normalized = (path.startsWith('/') ? path : `/${path}`).replace(/\/+/g, '/');
@@ -71,15 +79,21 @@ export default function WebsiteFooter() {
   // Replace {{year}} in translation with current year
   const copyrightText = t("website.footer.copyright").replace("{{year}}", currentYear.toString());
 
-  // Không thêm ?hl=xx cho link trong admin/footer, chỉ dùng cho các trang wu_
-  const langParam = "";
   // SSR category objects (with group_slug etc) injected as window.__SSR_WEBSITE_CATEGORY_OBJECTS__
   // Import SSR category object type
   let ssrCategories: any[] = (typeof window !== 'undefined' && Array.isArray(window.__SSR_WEBSITE_CATEGORIES__)) ? window.__SSR_WEBSITE_CATEGORIES__ : [];
-  // Type guard cho category chuẩn hóa
-  function isSSRCategory(cat: any): cat is { color: string; icon: string; description: string; category: string; slug: string; group_slug: string; is_group_slug: boolean } {
-    return cat && typeof cat === 'object' && 'color' in cat && 'icon' in cat && 'description' in cat && 'category' in cat && 'slug' in cat && 'group_slug' in cat && typeof cat.group_slug === 'string' && 'is_group_slug' in cat && typeof cat.is_group_slug === 'boolean';
-  }
+    const labelFromSSR = (cat: any): string => {
+      if (currentLang === 'en') {
+        const en = (cat?.category_en || '').toString();
+        return en.trim() ? en : (cat?.category || '').toString();
+      }
+      if (currentLang === 'zh') {
+        const zh = (cat?.category_zh || '').toString();
+        return zh.trim() ? zh : (cat?.category || '').toString();
+      }
+      return (cat?.category || '').toString();
+    };
+
   // Map icon name to AntD icon
   const iconMap: Record<string, React.ReactNode> = {
     ApartmentOutlined: <ApartmentOutlined />,
@@ -114,7 +128,7 @@ function isSSRGroupCategory(cat: any): cat is {
           color: cat.color,
           icon: iconMap[cat.icon] || <AppstoreOutlined />,
           description: cat.description,
-          category: cat.category,
+          category: labelFromSSR(cat),
           slug: cat.slug,
           path: `/${cat.slug}`,
         }));
@@ -162,11 +176,11 @@ function isSSRGroupCategory(cat: any): cat is {
                   ? (() => {
                       const groupCategories = ssrCategories.filter(isSSRGroupCategory);
                       if (groupCategories.length > 0) {
-                        return groupCategories[0].category || groupCategories[0].slug;
+                        return labelFromSSR(groupCategories[0]) || groupCategories[0].slug;
                       }
-                      return "Lĩnh Vực Dịch Vụ";
+                      return t('website.footer.services_title', 'Lĩnh Vực Dịch Vụ');
                     })()
-                  : "Lĩnh Vực Dịch Vụ"}
+                  : t('website.footer.services_title', 'Lĩnh Vực Dịch Vụ')}
               </h4>
               <ul className={styles.footerLinks} style={{ width: "100%", textAlign: "right", paddingRight: 0 }}>
                 {serviceCategories.map((cat) => (
