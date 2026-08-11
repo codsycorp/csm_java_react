@@ -36,12 +36,28 @@ export default function WebsiteFooter() {
     return 'vi';
   };
 
-  const resolveLangFromPathname = (pathname: string): 'vi' | 'en' | 'zh' => {
-    const first = String(pathname || '').trim().split('/').filter(Boolean)[0] || '';
-    return resolveSupportedLang(first);
+  const stripBasePathname = (pathname: string): string => {
+    const rawPath = pathname || '/';
+    const base = String((import.meta as any)?.env?.BASE_URL || '/').trim();
+    if (!base || base === '/') return rawPath;
+    const normalizedBase = base.endsWith('/') ? base.slice(0, -1) : base;
+    if (!normalizedBase || normalizedBase === '/') return rawPath;
+    if (rawPath === normalizedBase) return '/';
+    if (rawPath.startsWith(`${normalizedBase}/`)) {
+      const stripped = rawPath.slice(normalizedBase.length);
+      return stripped.startsWith('/') ? stripped : `/${stripped}`;
+    }
+    return rawPath;
   };
 
-  const currentLang = resolveSupportedLang(i18n.language || resolveLangFromPathname(location.pathname));
+  const detectLangFromPathname = (pathname: string): 'vi' | 'en' | 'zh' | undefined => {
+    const strippedPath = stripBasePathname(pathname);
+    const first = String(strippedPath || '').trim().split('/').filter(Boolean)[0] || '';
+    if (first === 'vi' || first === 'en' || first === 'zh') return first;
+    return undefined;
+  };
+
+  const currentLang = detectLangFromPathname(location.pathname) || resolveSupportedLang(i18n.language);
 
   const localizePath = (path: string): string => {
     const normalized = (path.startsWith('/') ? path : `/${path}`).replace(/\/+/g, '/');
