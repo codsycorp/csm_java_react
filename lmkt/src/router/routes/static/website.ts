@@ -22,6 +22,26 @@ const routes: AppRouteRecordRaw[] = [
     },
   },
   {
+    path: "/en",
+    Component: WuHome,
+    handle: {
+      order: 0,
+      title: "Trang Chủ (EN)",
+      icon: createElement(HomeOutlined),
+      hideInMenu: true,
+    },
+  },
+  {
+    path: "/zh",
+    Component: WuHome,
+    handle: {
+      order: 0,
+      title: "Trang Chủ (ZH)",
+      icon: createElement(HomeOutlined),
+      hideInMenu: true,
+    },
+  },
+  {
     path: "/lien-he",
     Component: WuContact,
     handle: {
@@ -32,11 +52,51 @@ const routes: AppRouteRecordRaw[] = [
     },
   },
   {
+    path: "/en/lien-he",
+    Component: WuContact,
+    handle: {
+      order: 6,
+      title: "Liên Hệ (EN)",
+      icon: createElement(MailOutlined),
+      hideInMenu: true,
+    },
+  },
+  {
+    path: "/zh/lien-he",
+    Component: WuContact,
+    handle: {
+      order: 6,
+      title: "Liên Hệ (ZH)",
+      icon: createElement(MailOutlined),
+      hideInMenu: true,
+    },
+  },
+  {
     path: "/ve-chung-toi",
     Component: WuAbout,
     handle: {
       order: 7,
       title: "Về Chúng Tôi",
+      icon: createElement(UserOutlined),
+      hideInMenu: true,
+    },
+  },
+  {
+    path: "/en/ve-chung-toi",
+    Component: WuAbout,
+    handle: {
+      order: 7,
+      title: "Về Chúng Tôi (EN)",
+      icon: createElement(UserOutlined),
+      hideInMenu: true,
+    },
+  },
+  {
+    path: "/zh/ve-chung-toi",
+    Component: WuAbout,
+    handle: {
+      order: 7,
+      title: "Về Chúng Tôi (ZH)",
       icon: createElement(UserOutlined),
       hideInMenu: true,
     },
@@ -53,11 +113,47 @@ const routes: AppRouteRecordRaw[] = [
     },
   },
   {
+    path: "/en/:slug",
+    Component: WuCategoryPage,
+    handle: {
+      order: 9,
+      title: "Dịch Vụ - Category (EN)",
+      hideInMenu: true,
+    },
+  },
+  {
+    path: "/zh/:slug",
+    Component: WuCategoryPage,
+    handle: {
+      order: 9,
+      title: "Dịch Vụ - Category (ZH)",
+      hideInMenu: true,
+    },
+  },
+  {
     path: "/:category/:slug",
     Component: WuServiceDetail,
     handle: {
       order: 10,
       title: "Chi Tiết Dịch Vụ",
+      hideInMenu: true,
+    },
+  },
+  {
+    path: "/en/:category/:slug",
+    Component: WuServiceDetail,
+    handle: {
+      order: 10,
+      title: "Chi Tiết Dịch Vụ (EN)",
+      hideInMenu: true,
+    },
+  },
+  {
+    path: "/zh/:category/:slug",
+    Component: WuServiceDetail,
+    handle: {
+      order: 10,
+      title: "Chi Tiết Dịch Vụ (ZH)",
       hideInMenu: true,
     },
   }
