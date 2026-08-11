@@ -24,6 +24,10 @@ const ssrCategoryCacheTTL = 10 * time.Minute
 const ssrSlowLogDefault = 1200 * time.Millisecond
 const ssrDetailPrefixFallbackMaxSlugLen = 64
 
+func routerRunActiveFilter() model.SearchFilter {
+	return model.SearchFilter{Field: "run", FilterType: "in", Value: []any{1, "1", true}}
+}
+
 type ssrCacheEntry struct {
 	data    string
 	expires time.Time
@@ -319,7 +323,7 @@ func ResolveRPIndexPub(rm *data.RecordManager, host string) string {
 		model.EqFilter("app_type", "web"),
 		{Field: "rp_index", FilterType: "isnotnull"},
 		{Field: "rp_index", FilterType: "noteq", Value: ""},
-		model.EqFilter("run", 1),
+		routerRunActiveFilter(),
 	}); ok {
 		if rp := strings.Trim(strings.Trim(route.RPIndex, "/"), " "); rp != "" {
 			return rp
@@ -335,7 +339,7 @@ func ResolveRPIndexPub(rm *data.RecordManager, host string) string {
 		model.EqFilter("app_type", "web"),
 		{Field: "rp_index", FilterType: "isnotnull"},
 		{Field: "rp_index", FilterType: "noteq", Value: ""},
-		model.EqFilter("run", 1),
+		routerRunActiveFilter(),
 	}); ok {
 		if rp := strings.Trim(strings.Trim(route.RPIndex, "/"), " "); rp != "" {
 			return rp
@@ -345,7 +349,7 @@ func ResolveRPIndexPub(rm *data.RecordManager, host string) string {
 		model.EqFilter("domain_name", domain),
 		{Field: "rp_index", FilterType: "isnotnull"},
 		{Field: "rp_index", FilterType: "noteq", Value: ""},
-		model.EqFilter("run", 1),
+		routerRunActiveFilter(),
 	}); ok {
 		if rp := strings.Trim(strings.Trim(route.RPIndex, "/"), " "); rp != "" {
 			return rp
@@ -359,7 +363,7 @@ func ResolveRPIndexPub(rm *data.RecordManager, host string) string {
 
 func findRouterRPIndexByDomain(rm *data.RecordManager, domain string) string {
 	rows := rowsFrom(rm.Filter("csm", "sys_la_routers", model.SearchFilter{Operator: "AND", Conditions: []model.SearchFilter{
-		model.EqFilter("run", 1),
+		routerRunActiveFilter(),
 	}}))
 	rows = filterRouterRowsByDomainAliases(rows, []model.SearchFilter{model.EqFilter("domain_name", domain)})
 	bestScore := -1
@@ -1005,7 +1009,7 @@ func resolveRoute(rm *data.RecordManager, host, path string) resolvedRoute {
 				model.EqFilter("domain_name", candidate),
 				model.EqFilter("f_case", fCase),
 				model.EqFilter("app_type", "web"),
-				model.EqFilter("run", 1),
+				routerRunActiveFilter(),
 			}); ok {
 				route.Domain = candidate
 				return route
@@ -1014,7 +1018,7 @@ func resolveRoute(rm *data.RecordManager, host, path string) resolvedRoute {
 		if route, ok := queryRoute(rm, []model.SearchFilter{
 			model.EqFilter("domain_name", candidate),
 			model.EqFilter("f_case", fCase),
-			model.EqFilter("run", 1),
+			routerRunActiveFilter(),
 		}); ok {
 			route.Domain = candidate
 			return route
@@ -1034,7 +1038,7 @@ func resolveRoute(rm *data.RecordManager, host, path string) resolvedRoute {
 		if route, ok := queryRoute(rm, []model.SearchFilter{
 			model.EqFilter("domain_name", candidate),
 			model.EqFilter("app_type", "web"),
-			model.EqFilter("run", 1),
+			routerRunActiveFilter(),
 		}); ok {
 			route.Domain = candidate
 			return route
@@ -1045,7 +1049,7 @@ func resolveRoute(rm *data.RecordManager, host, path string) resolvedRoute {
 	if route, ok := queryRoute(rm, []model.SearchFilter{
 		model.EqFilter("domain_name", ""),
 		model.EqFilter("f_case", "default"),
-		model.EqFilter("run", 1),
+		routerRunActiveFilter(),
 	}); ok {
 		return route
 	}
@@ -1059,7 +1063,7 @@ func queryReactCatchAllRoute(rm *data.RecordManager, domain string) (resolvedRou
 		model.EqFilter("f_case", ""),
 		{Field: "rp_index", FilterType: "isnotnull"},
 		{Field: "rp_index", FilterType: "noteq", Value: ""},
-		model.EqFilter("run", 1),
+		routerRunActiveFilter(),
 	}}
 	rows := filterRouterRowsByDomainAliases(rowsFrom(rm.Filter("csm", "sys_la_routers", filter)), []model.SearchFilter{model.EqFilter("domain_name", domain)})
 	if len(rows) == 0 {
@@ -1192,7 +1196,11 @@ func filterRouterRowsByDomainAliases(rows []map[string]any, conditions []model.S
 
 func routerDomainConditionValue(conditions []model.SearchFilter) string {
 	for _, cond := range conditions {
-		if strings.EqualFold(strings.TrimSpace(cond.Field), "domain_name") && strings.EqualFold(strings.TrimSpace(cond.FilterType), "eq") {
+		if strings.EqualFold(strings.TrimSpace(cond.Field), "domain_name") {
+			ft := strings.ToLower(strings.TrimSpace(cond.FilterType))
+			if ft != "eq" && ft != "like" {
+				continue
+			}
 			return DomainFromHost(cond.ValueString())
 		}
 	}
