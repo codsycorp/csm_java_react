@@ -457,6 +457,67 @@
   position: relative;
   overflow-x: clip; /* Ngăn cuộn ngang trên nội dung chính mà không ảnh hưởng đến position: fixed */
 }
+
+/* CMS HTML is authored independently of the active website theme. */
+:global(.cms-content) {
+  color: var(--text-primary) !important;
+  background: transparent !important;
+}
+
+:global(.cms-content *) {
+  color: inherit !important;
+  background-color: transparent !important;
+  border-color: var(--card-border) !important;
+}
+
+:global(.cms-content h1),
+:global(.cms-content h2),
+:global(.cms-content h3),
+:global(.cms-content h4),
+:global(.cms-content h5),
+:global(.cms-content h6) {
+  color: var(--text-primary) !important;
+  line-height: 1.35;
+}
+
+:global(.cms-content a) {
+  color: var(--brand-primary) !important;
+  text-decoration-color: currentColor;
+}
+
+:global(.cms-content blockquote),
+:global(.cms-content aside),
+:global(.cms-content div[style*="background"]),
+:global(.cms-content section[style*="background"]) {
+  background: var(--bg-tertiary) !important;
+  border-color: var(--card-border) !important;
+  border-radius: 6px;
+}
+
+:global(.cms-content table) {
+  width: 100% !important;
+  max-width: 100%;
+  border-collapse: collapse !important;
+  color: var(--text-primary) !important;
+}
+
+:global(.cms-content th) {
+  background: var(--bg-tertiary) !important;
+  color: var(--text-primary) !important;
+}
+
+:global(.cms-content td),
+:global(.cms-content th) {
+  border-color: var(--card-border) !important;
+  padding: 10px;
+}
+
+:global(.cms-content img),
+:global(.cms-content video),
+:global(.cms-content iframe) {
+  max-width: 100%;
+  height: auto;
+}
   /* Service Detail Theme - Enforce theme background and text color for detail page */
   .service-detail-theme {
     background: var(--bg-primary, #fff);

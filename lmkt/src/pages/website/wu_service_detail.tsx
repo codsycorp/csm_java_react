@@ -975,6 +975,7 @@ const GenericDetail = ({ post, t }: { post: ServicePost, t: any }) => {
               React.createElement(Title, { level: 3, style: { color: 'var(--text-primary)' }, key: 'desc-title' }, t('website.services.detail.description', 'Mô tả dịch vụ')),
               postContent 
                 ? React.createElement('div', { 
+                    className: 'cms-content',
                     style: { color: 'var(--text-primary)', lineHeight: 1.8 }, 
                     dangerouslySetInnerHTML: { __html: sanitizeHtmlForRender(decodeHtml(postContent) || '') }, 
                     key: 'desc-html' 
@@ -1111,7 +1112,7 @@ const RealEstateDetail = ({ post, t }: { post: ServicePost, t: any }) => {
   };
 
   const htmlBlock = postContent
-    ? React.createElement('div', { key: 'html-block', style: { color: 'var(--text-primary)', lineHeight: 1.7 }, dangerouslySetInnerHTML: { __html: sanitizeHtmlForRender(decodeHtml(postContent) || '') } })
+    ? React.createElement('div', { key: 'html-block', className: 'cms-content', style: { color: 'var(--text-primary)', lineHeight: 1.7 }, dangerouslySetInnerHTML: { __html: sanitizeHtmlForRender(decodeHtml(postContent) || '') } })
     : React.createElement(Paragraph, { key: 'no-desc', style: { color: 'var(--text-secondary)' } }, t('website.services.detail.no_description', 'Chưa có mô tả chi tiết.'));
   
   return React.createElement(
@@ -1531,7 +1532,7 @@ const BookingDetail = ({ post, t }: { post: ServicePost, t: any }) => {
     React.createElement(Divider, null),
     React.createElement(Title, { level: 4, style: { color: 'var(--text-primary)' }, key: 'desc-title' }, t('website.services.detail.description', 'Mô tả dịch vụ')),
     (postContent
-      ? React.createElement('div', { key: 'desc-content', style: { color: 'var(--text-primary)', lineHeight: 1.7 }, dangerouslySetInnerHTML: { __html: sanitizeHtmlForRender(decodeHtml(postContent) || '') } })
+      ? React.createElement('div', { key: 'desc-content', className: 'cms-content', style: { color: 'var(--text-primary)', lineHeight: 1.7 }, dangerouslySetInnerHTML: { __html: sanitizeHtmlForRender(decodeHtml(postContent) || '') } })
       : React.createElement(Paragraph, { key: 'desc-content', style: { color: 'var(--text-secondary)' } }, t('website.services.detail.no_description', 'Chưa có mô tả chi tiết.'))),
     React.createElement(Modal, {
       open: modalOpen,

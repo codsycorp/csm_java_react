@@ -100,11 +100,12 @@ export default function WuGroupLandingPage() {
               style={{
                 marginTop: 16,
                 padding: '16px 20px',
-                background: '#fff',
+                background: 'var(--card-bg)',
                 borderRadius: 12,
-                border: '1px solid #e5e7eb',
+                border: '1px solid var(--card-border)',
                 lineHeight: 1.8,
               }}
+              className="cms-content"
               dangerouslySetInnerHTML={{ __html: content }}
             />
           ) : null}

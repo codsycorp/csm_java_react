@@ -456,15 +456,14 @@ const renderCardMedia = (post: ServicePost, categoryKey: string, altText: string
 // Helper function to get multilingual field value
 const getMultilingualField = (obj: any, fieldName: string, currentLang: string = 'vi'): string => {
   if (!obj) return '';
-  
-  // For Vietnamese, use field without suffix first
-  if (currentLang === 'vi') {
-    return obj[fieldName] || obj[`${fieldName}_vi`] || '';
-  }
-  
-  // For other languages, use field with suffix, fallback to Vietnamese
-  const langField = `${fieldName}_${currentLang}`;
-  return obj[langField] || obj[fieldName] || obj[`${fieldName}_vi`] || '';
+
+  const langField = currentLang === 'vi' ? fieldName : `${fieldName}_${currentLang}`;
+  const value = obj[langField] || obj[fieldName] || obj[`${fieldName}_vi`] || '';
+  if (value || fieldName !== 'excerpt') return value;
+
+  const contentLangField = currentLang === 'vi' ? 'content' : `content_${currentLang}`;
+  const content = obj[contentLangField] || obj.content || obj.content_vi || '';
+  return String(content).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 220);
 };
 
 // Helper: get localized attribute (attributes_* like legalStatus, address, location)
@@ -2442,7 +2441,7 @@ const WuServicesPage: React.FC = () => {
                     lineHeight: 1.8,
                     color: 'var(--text-primary)'
                   }}
-                  className="category-content-intro"
+                  className="category-content-intro cms-content"
                   dangerouslySetInnerHTML={{ __html: sanitizeHtmlForRender(decodeHtml(content) || '') }}
                 />
               )}

@@ -41,9 +41,15 @@ function toArrayOfStrings(v: any): string[] | undefined {
 export function normalizeServiceDetail(raw: any): ServicePost {
   const id = String(raw?.id ?? raw?.service_id ?? "");
   const title = String(raw?.title ?? raw?.name ?? "");
+  const title_en = raw?.title_en ?? undefined;
+  const title_zh = raw?.title_zh ?? undefined;
   const slug = String(raw?.slug ?? (title ? slugify(title) : ""));
   const excerpt = raw?.excerpt ?? raw?.summary ?? raw?.meta_description ?? "";
+  const excerpt_en = raw?.excerpt_en ?? undefined;
+  const excerpt_zh = raw?.excerpt_zh ?? undefined;
   const content = raw?.content ?? raw?.html ?? "";
+  const content_en = raw?.content_en ?? undefined;
+  const content_zh = raw?.content_zh ?? undefined;
   const thumbnail = raw?.thumbnail ?? raw?.image_url ?? raw?.cover ?? undefined;
   const images = toArrayOfStrings(raw?.images) ?? (thumbnail ? [thumbnail] : undefined);
   const videos = toArrayOfStrings(raw?.videos ?? raw?.video ?? raw?.video_url ?? raw?.album);
@@ -100,9 +106,15 @@ export function normalizeServiceDetail(raw: any): ServicePost {
   return {
     id,
     title,
+    title_en,
+    title_zh,
     slug,
     excerpt,
+    excerpt_en,
+    excerpt_zh,
     content,
+    content_en,
+    content_zh,
     thumbnail,
     images,
     videos,
