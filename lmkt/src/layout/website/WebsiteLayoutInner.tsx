@@ -151,27 +151,11 @@ export default function WebsiteLayoutInner({ children, selectedKey, menuItems, t
     themeColorPrimary, 
     theme: themeMode, 
     language,
-    changeLanguage,
-    changeSiteTheme 
+    changeLanguage
   } = usePreferencesStore();
   
   const [isMobile, setIsMobile] = useState(false);
   const [isClient, setIsClient] = useState(false);
-
-  // Auto theme based on time of day (only if user hasn't set preference)
-  useEffect(() => {
-    // Only apply auto theme if theme is 'auto' or not set
-    if (themeMode === 'auto' || !themeMode) {
-      const hour = new Date().getHours();
-      // Dark mode: 18:00 (6 PM) to 6:00 (6 AM)
-      // Light mode: 6:00 (6 AM) to 18:00 (6 PM)
-      const shouldBeDark = hour >= 18 || hour < 6;
-      const autoTheme = shouldBeDark ? 'dark' : 'light';
-      
-      // Apply auto theme
-      changeSiteTheme(autoTheme);
-    }
-  }, [themeMode, changeSiteTheme]);
 
   useEffect(() => {
     setIsClient(true);

@@ -30,6 +30,14 @@ const sanitizeHtml = (html?: string) => {
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, 'text/html');
     doc.querySelectorAll('script,iframe,object,embed').forEach((n) => n.remove());
+    doc.body.querySelectorAll('*').forEach((element) => {
+      const htmlElement = element as HTMLElement;
+      htmlElement.style.removeProperty('color');
+      htmlElement.style.removeProperty('background');
+      htmlElement.style.removeProperty('background-color');
+      htmlElement.removeAttribute('color');
+      htmlElement.removeAttribute('bgcolor');
+    });
     return doc.body.innerHTML;
   } catch {
     return html;

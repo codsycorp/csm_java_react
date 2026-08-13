@@ -199,6 +199,7 @@ const sanitizeHtmlForRender = (html?: string): string => {
 
     const allElements = doc.body.querySelectorAll('*');
     allElements.forEach((el) => {
+      const htmlElement = el as HTMLElement;
       Array.from(el.attributes).forEach((attr) => {
         const name = attr.name.toLowerCase();
         const value = String(attr.value || '').trim().toLowerCase();
@@ -212,6 +213,11 @@ const sanitizeHtmlForRender = (html?: string): string => {
           el.removeAttribute(attr.name);
         }
       });
+      htmlElement.style.removeProperty('color');
+      htmlElement.style.removeProperty('background');
+      htmlElement.style.removeProperty('background-color');
+      htmlElement.removeAttribute('color');
+      htmlElement.removeAttribute('bgcolor');
     });
 
     return doc.body.innerHTML;
