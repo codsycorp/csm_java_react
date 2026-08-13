@@ -37,7 +37,7 @@ func breadcrumbMenuLabels(lang string) (home, services string) {
 
 func buildLocalizedURL(baseURL, pagePath, lang string) string {
 	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	path := pagePath
+	path := canonicalSEOPath(pagePath)
 	if path == "" {
 		path = "/"
 	}
@@ -45,14 +45,13 @@ func buildLocalizedURL(baseURL, pagePath, lang string) string {
 		path = "/" + path
 	}
 	lang = resolveLang(map[string]string{"hl": lang})
-	if lang == "en" || lang == "zh" {
-		if path == "/" {
-			path = "/" + lang
-		} else {
-			path = "/" + lang + path
-		}
+	if lang == "vi" || lang == "" {
+		return base + path
 	}
-	return base + path
+	if path == "/" {
+		return base + "/" + lang
+	}
+	return base + "/" + lang + path
 }
 
 func buildHreflangLinks(baseURL, pagePath string) []hreflangLink {

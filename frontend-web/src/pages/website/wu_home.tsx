@@ -1,5 +1,4 @@
 // Dùng slugify chuẩn hoá dùng chung
-import { slugify } from "../../utils/normalize";
 import { getDefaultCategorySlug } from "../../utils/getDefaultCategorySlug";
 import React, { useState, useEffect, useMemo } from "react";
 import { useLocation } from "react-router";
@@ -82,40 +81,21 @@ import {
   Card,
   Typography,
   Button,
-  Space,
-  Statistic,
   Tag,
   Avatar,
   Rate,
-  List,
 } from "antd";
 import {
   RocketOutlined,
   CodeOutlined,
-  CloudDownloadOutlined,
-  ThunderboltOutlined,
-  SearchOutlined,
-  ArrowRightOutlined,
-  TrophyOutlined,
-  UserOutlined,
-  TeamOutlined,
-  CheckCircleOutlined,
   GlobalOutlined,
-  SafetyOutlined,
-  StarOutlined,
   HomeOutlined,
   SkinOutlined,
   CarOutlined,
-  ShoppingOutlined,
   CalendarOutlined, // Thêm dòng này để fix lỗi không tìm thấy CalendarOutlined
-  MobileOutlined,
-  SettingOutlined,
-  PlayCircleOutlined,
   PhoneOutlined,
-  StarFilled,
   AppstoreOutlined,
 } from "@ant-design/icons";
-import { extractSSRInitialData } from "../../utils/normalize";
 import { useTranslation } from "react-i18next";
 import styles from "#src/layout/website/websiteLayout.module.css";
 import { fetchServiceList } from "#src/api/wu_service";
@@ -148,11 +128,6 @@ export default function WuHome() {
   useLanguageFromQuery();
   const { t } = useTranslation();
   const menuItems = useWebsiteMenu();
-
-  // Navigation handlers - All use SSR (window.location.href)
-  const handleNavigateToSector = (sectorSlug: string) => {
-    // Not used - sectors use direct href in render
-  };
 
   const getLangCode = () => {
     const short = resolveSupportedLang(i18n.language);
@@ -503,6 +478,10 @@ export default function WuHome() {
   const specialTotalPages = Math.ceil(specialSoftwarePosts.length / PAGE_SIZE);
   const featuredPagePosts = featuredSoftwarePosts.slice((featuredPage-1)*PAGE_SIZE, featuredPage*PAGE_SIZE);
   const specialPagePosts = specialSoftwarePosts.slice((specialPage-1)*PAGE_SIZE, specialPage*PAGE_SIZE);
+  const belowFoldSectionStyle: React.CSSProperties = {
+    contentVisibility: 'auto',
+    containIntrinsicSize: '1000px',
+  };
 
   return (
 
@@ -528,7 +507,8 @@ export default function WuHome() {
   {/* Main Products Section */}
       <div style={{ 
         padding: "100px 24px",
-        background: "var(--bg-primary)"
+        background: "var(--bg-primary)",
+        ...belowFoldSectionStyle,
       }}>
         <Row justify="center">
           <Col xs={24} lg={20}>
@@ -554,7 +534,6 @@ export default function WuHome() {
             
             <Row gutter={[32, 32]}>
               {featuredPagePosts.map((post) => {
-                const slug = post.slug;
                 return (
                   <Col xs={24} lg={8} key={post.id}>
                     <Card
@@ -639,7 +618,8 @@ export default function WuHome() {
   {/* Software Services Section */}
       <div style={{ 
         padding: "100px 24px",
-        background: "var(--bg-primary)"
+        background: "var(--bg-primary)",
+        ...belowFoldSectionStyle,
       }}>
         <Row justify="center">
           <Col xs={24} lg={20}>
@@ -667,7 +647,6 @@ export default function WuHome() {
                 </Col>
               ) : (
                 specialPagePosts.map((post) => {
-                  const slug = post.slug;
                   return (
                     <Col xs={24} lg={8} key={post.id}>
                       <Card
@@ -747,6 +726,7 @@ export default function WuHome() {
       <div style={{
         padding: "80px 24px 60px 24px",
         background: "var(--bg-secondary)",
+        ...belowFoldSectionStyle,
       }}>
         <Row justify="center">
           <Col xs={24} lg={20}>
@@ -845,7 +825,8 @@ export default function WuHome() {
       <div style={{ 
         padding: "100px 24px", 
         background: "var(--bg-secondary)",
-        position: "relative"
+        position: "relative",
+        ...belowFoldSectionStyle,
       }}>
         <Row justify="center">
           <Col xs={24} lg={20}>

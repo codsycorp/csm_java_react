@@ -24,6 +24,23 @@ DEFAULT_URLS = [
 DEFAULT_LANGS = ["vi", "en", "zh"]
 
 
+def localized_path(path: str, lang: str) -> str:
+    raw = (path or "/").strip()
+    if not raw.startswith("/"):
+        raw = "/" + raw
+    if raw != "/":
+        raw = raw.rstrip("/")
+    if lang in {"en", "zh"}:
+        if raw == "/":
+            return f"/{lang}"
+        return f"/{lang}{raw}"
+    return raw
+
+
+def expected_canonical(base: str, path: str, lang: str) -> str:
+    return base.rstrip("/") + localized_path(path, lang)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="SSR SEO predeploy audit gate")
     parser.add_argument("--base", default=DEFAULT_BASE, help="Backend base URL, e.g. http://localhost:9999")
@@ -145,9 +162,23 @@ def check_asset_delivery(base: str, host_override: str, asset_path: str, timeout
     }
 
 
-def check_page(path: str, lang: str, html: str, status: int, headers: dict, latency_ms: int, max_latency_ms: int, asset_report: dict) -> dict:
+def check_page(path: str, lang: str, html: str, status: int, headers: dict, latency_ms: int, max_latency_ms: int, asset_report: dict, base: str) -> dict:
     path_depth = len([s for s in path.split("/") if s.strip()])
     latency_budget = max_latency_ms if path_depth <= 1 else max(max_latency_ms, 2200)
+    expected_can = expected_canonical(base, path, lang)
+    canonical_match = re.search(r'<link[^>]+rel="canonical"[^>]+href="([^"]+)"', html, re.I | re.S)
+    canonical_href = canonical_match.group(1).strip() if canonical_match else ""
+
+    expected_hreflangs = {
+        "vi": expected_canonical(base, path, "vi"),
+        "en": expected_canonical(base, path, "en"),
+        "zh": expected_canonical(base, path, "zh"),
+    }
+    hreflang_ok = all(
+        f'hreflang="{k}"' in html and f'href="{v}"' in html
+        for k, v in expected_hreflangs.items()
+    )
+    hreflang_ok = hreflang_ok and f'hreflang="x-default"' in html and f'href="{expected_hreflangs["vi"]}"' in html
 
     jsonld_blocks = re.findall(r"<script[^>]+type=\"application/ld\+json\"[^>]*>(.*?)</script>", html, re.I | re.S)
     jsonld_text = "\n".join(jsonld_blocks)
@@ -156,9 +187,11 @@ def check_page(path: str, lang: str, html: str, status: int, headers: dict, late
 
     checks = {
         "status_200": status == 200,
-        "canonical": has(r"<link[^>]+rel=\"canonical\"[^>]+href=\"[^\"]+\"", html),
+        "canonical": bool(canonical_href),
+        "canonical_exact": canonical_href == expected_can,
         "robots_strict": "max-image-preview:large" in html and "max-snippet:-1" in html,
         "hreflang": has(r"rel=\"alternate\"\s+hreflang=", html),
+        "hreflang_expected": hreflang_ok,
         "og_url": has(r"property=\"og:url\"", html),
         "meta_description": meta_desc,
         "title_nonempty": title_ok,
@@ -182,8 +215,10 @@ def check_page(path: str, lang: str, html: str, status: int, headers: dict, late
     required = [
         "status_200",
         "canonical",
+        "canonical_exact",
         "robots_strict",
         "hreflang",
+        "hreflang_expected",
         "og_url",
         "meta_description",
         "title_nonempty",
@@ -202,11 +237,15 @@ def check_page(path: str, lang: str, html: str, status: int, headers: dict, late
 
     return {
         "path": path,
+        "resolved_path": localized_path(path, lang),
         "lang": lang,
         "status": status,
         "latency_ms": latency_ms,
         "latency_budget_ms": latency_budget,
         "content_type": headers.get("content-type", ""),
+        "canonical_href": canonical_href,
+        "expected_canonical": expected_can,
+        "expected_hreflangs": expected_hreflangs,
         "asset": asset_report,
         "checks": checks,
         "required": required,
@@ -234,18 +273,19 @@ def check_robots(base: str, host_override: str, timeout: int) -> dict:
     }
 
 
-def check_sitemap(base: str, host_override: str, timeout: int) -> dict:
-    body, status, headers, latency_ms = fetch_text(base, "/sitemap.xml", {"__host": host_override}, timeout)
+def check_sitemap(base: str, host_override: str, timeout: int, path: str, expect_index: bool = False) -> dict:
+    body, status, headers, latency_ms = fetch_text(base, path, {"__host": host_override}, timeout)
     checks = {
         "status_200": status == 200,
         "xml_like": "<?xml" in body or "<urlset" in body or "<sitemapindex" in body,
         "has_url_entries": "<url>" in body or "<sitemap>" in body,
         "content_type_xml": "xml" in headers.get("content-type", "").lower(),
+        "shape_match": ("<sitemapindex" in body) if expect_index else ("<urlset" in body),
     }
-    required = ["status_200", "xml_like", "has_url_entries", "content_type_xml"]
+    required = ["status_200", "xml_like", "has_url_entries", "content_type_xml", "shape_match"]
     missing = [k for k in required if not checks.get(k, False)]
     return {
-        "name": "sitemap.xml",
+        "name": path,
         "status": status,
         "latency_ms": latency_ms,
         "checks": checks,
@@ -265,10 +305,11 @@ def main() -> int:
             for path in paths:
                 for lang in langs:
                     try:
+                        req_path = localized_path(path, lang)
                         fetch_text(
                             args.base,
-                            path,
-                            {"__host": args.host_override, "hl": lang},
+                            req_path,
+                            {"__host": args.host_override},
                             args.timeout,
                         )
                     except Exception:
@@ -279,10 +320,11 @@ def main() -> int:
     for path in paths:
         for lang in langs:
             try:
+                req_path = localized_path(path, lang)
                 html, status, headers, latency_ms = fetch_text(
                     args.base,
-                    path,
-                    {"__host": args.host_override, "hl": lang},
+                    req_path,
+                    {"__host": args.host_override},
                     args.timeout,
                 )
                 asset_path = first_asset_path(html)
@@ -297,6 +339,7 @@ def main() -> int:
                         latency_ms,
                         args.max_latency_ms if len([s for s in path.split("/") if s.strip()]) <= 1 else args.max_latency_detail_ms,
                         asset_report,
+                        args.base,
                     )
                 )
             except Exception as exc:
@@ -310,11 +353,22 @@ def main() -> int:
                 )
 
     system_results = []
-    for fn in (check_robots, check_sitemap):
+    sitemap_targets = [
+        ("/sitemap.xml", True),
+        ("/sitemap-pages.xml", False),
+        ("/sitemap-categories.xml", False),
+        ("/sitemap-details.xml", False),
+    ]
+    for fn in (check_robots,):
         try:
             system_results.append(fn(args.base, args.host_override, args.timeout))
         except Exception as exc:
             system_results.append({"name": fn.__name__, "error": str(exc), "missing": ["fetch_ok"]})
+    for target, expect_index in sitemap_targets:
+        try:
+            system_results.append(check_sitemap(args.base, args.host_override, args.timeout, target, expect_index=expect_index))
+        except Exception as exc:
+            system_results.append({"name": target, "error": str(exc), "missing": ["fetch_ok"]})
 
     failed_pages = [r for r in page_results if r.get("missing")]
     failed_system = [r for r in system_results if r.get("missing")]

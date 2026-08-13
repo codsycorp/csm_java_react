@@ -170,7 +170,7 @@ func isPublicAPIPath(method, path string) bool {
 	case "/login", "/refresh-token", "/register", "/create-default-data",
 		"/chat-history", "/chat-history-guest", "/chat-history-app",
 		"/chat-mark-read", "/chat-mark-read-guest", "/chat-mark-all-read", "/chat-mark-read-all",
-		"/traffic/analyze-frame":
+		"/traffic/analyze-frame", "/public/site", "/api/public/site":
 		return true
 	}
 	if strings.HasPrefix(path, "/monitoring") || strings.HasPrefix(path, "/ai-local") {

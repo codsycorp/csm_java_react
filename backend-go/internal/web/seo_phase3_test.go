@@ -10,8 +10,8 @@ func TestBuildLocalizedURL(t *testing.T) {
 		base, path, lang, want string
 	}{
 		{"https://example.com", "/dich-vu/slug", "vi", "https://example.com/dich-vu/slug"},
-		{"https://example.com", "/dich-vu/slug", "en", "https://example.com/dich-vu/slug?hl=en"},
-		{"https://example.com", "/", "zh", "https://example.com/?hl=zh"},
+		{"https://example.com", "/dich-vu/slug", "en", "https://example.com/en/dich-vu/slug"},
+		{"https://example.com", "/", "zh", "https://example.com/zh"},
 	}
 	for _, tc := range tests {
 		got := buildLocalizedURL(tc.base, tc.path, tc.lang)
@@ -33,7 +33,7 @@ func TestBuildHreflangLinks(t *testing.T) {
 	if byLang["vi"] != "https://example.com/ve-may-bay" {
 		t.Fatalf("vi href: %s", byLang["vi"])
 	}
-	if byLang["en"] != "https://example.com/ve-may-bay?hl=en" {
+	if byLang["en"] != "https://example.com/en/ve-may-bay" {
 		t.Fatalf("en href: %s", byLang["en"])
 	}
 	if byLang["x-default"] != byLang["vi"] {
@@ -140,7 +140,7 @@ func TestPreprocessHTMLHreflangAndLang(t *testing.T) {
 	if !strings.Contains(html, `lang="en"`) {
 		t.Fatalf("expected html lang=en, got: %s", html)
 	}
-	if !strings.Contains(html, `hreflang="en"`) || !strings.Contains(html, `?hl=en`) {
+	if !strings.Contains(html, `hreflang="en"`) || !strings.Contains(html, `/en/ve-may-bay`) {
 		t.Fatalf("expected hreflang en link, got: %s", html)
 	}
 	if !strings.Contains(html, `og:locale:alternate`) {

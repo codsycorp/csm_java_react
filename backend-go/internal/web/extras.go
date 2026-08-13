@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"csm_server/backend-go/internal/data"
 	"csm_server/backend-go/internal/model"
@@ -18,6 +19,7 @@ func GenerateRobotsTxt(host string) string {
 	txt := "User-agent: *\nAllow: /\nDisallow: /admin/\nDisallow: /api/\nDisallow: /upload.shtml\n\n"
 	if host != "" {
 		txt += fmt.Sprintf("Sitemap: https://%s/sitemap.xml\n", host)
+		txt += fmt.Sprintf("Sitemap: https://%s/sitemap-all.xml\n", host)
 		txt += fmt.Sprintf("Sitemap: https://%s/feed.xml\n", host)
 	}
 	return txt
@@ -89,6 +91,7 @@ func ServeFeedXML(st *state.AppState, w http.ResponseWriter, host string) {
 		}
 	}
 	feed += "  </channel>\n</rss>"
+	w.Header().Set("Cache-Control", "public, max-age=300, s-maxage=900, stale-while-revalidate=3600, stale-if-error=86400")
 	w.Header().Set("Content-Type", "application/rss+xml; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(feed))
@@ -432,15 +435,61 @@ func preferredEncoding(acceptEncoding string) string {
 	return ""
 }
 
-func writeFileResponse(w http.ResponseWriter, path string, data []byte, contentEncoding string) {
+func writeFileResponse(w http.ResponseWriter, r *http.Request, path string, data []byte, contentEncoding string) {
+	applyResponseSecurityHeaders(w)
 	w.Header().Set("Content-Type", mimeFromPath(path))
 	w.Header().Set("Cache-Control", staticCacheControl(path))
 	if contentEncoding != "" {
 		w.Header().Set("Content-Encoding", contentEncoding)
 		w.Header().Set("Vary", "Accept-Encoding")
 	}
+
+	modTime := time.Time{}
+	if info, err := os.Stat(path); err == nil {
+		modTime = info.ModTime().UTC().Truncate(time.Second)
+		w.Header().Set("Last-Modified", modTime.Format(http.TimeFormat))
+	}
+	etag := fmt.Sprintf(`W/"%x-%x-%d-%s"`, len(path), modTime.Unix(), len(data), contentEncoding)
+	w.Header().Set("ETag", etag)
+
+	if isStaticNotModified(r, etag, modTime) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
+}
+
+func etagMatch(candidate, headerValue string) bool {
+	if strings.TrimSpace(candidate) == "" || strings.TrimSpace(headerValue) == "" {
+		return false
+	}
+	for _, token := range strings.Split(headerValue, ",") {
+		t := strings.TrimSpace(token)
+		if t == "*" || t == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func isStaticNotModified(r *http.Request, etag string, modTime time.Time) bool {
+	if r == nil {
+		return false
+	}
+	if inm := strings.TrimSpace(r.Header.Get("If-None-Match")); inm != "" {
+		return etagMatch(etag, inm)
+	}
+	if modTime.IsZero() {
+		return false
+	}
+	if ims := strings.TrimSpace(r.Header.Get("If-Modified-Since")); ims != "" {
+		if t, err := http.ParseTime(ims); err == nil {
+			return !modTime.After(t.UTC().Truncate(time.Second))
+		}
+	}
+	return false
 }
 
 func readStaticCandidate(path, acceptEncoding string) ([]byte, string, string, bool) {
@@ -510,5 +559,5 @@ func ServeAppImages(st *state.AppState, w http.ResponseWriter, r *http.Request, 
 		http.NotFound(w, r)
 		return
 	}
-	writeFileResponse(w, path, data, "")
+	writeFileResponse(w, r, path, data, "")
 }

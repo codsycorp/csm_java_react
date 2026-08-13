@@ -2887,7 +2887,6 @@ export function CsmDynamicGrid({
 		const configured = (m_configs.table || [])
 			.filter(f => isGridVisibleTableField(f) && isEnabledFlag((f as any).f_search))
 			.map(f => f.f_name);
-		if (configured.length > 0) return configured;
 		const heuristic = (m_configs.table || [])
 			.filter(f => isGridVisibleTableField(f))
 			.map(f => f.f_name)
@@ -2895,7 +2894,10 @@ export function CsmDynamicGrid({
 				const tf = (m_configs.table.find(f => f.f_name === name)?.f_types || "").toLowerCase();
 						return /ed|text|textarea|html|slug|name|title|excerpt|code|status|cbo|select|co|coro|cp|multi_tag|menu_tree|multi_select|tag|etag|bool|switch|checkbox|check|int|float|double|number|money|currency|date|datetime|time/.test(tf);
 			});
-		if (heuristic.length > 0) return heuristic;
+		// A menu may mark a few preferred fields, but global grid search must not
+		// silently omit other visible business columns when the server pages data.
+		const merged = Array.from(new Set([...configured, ...heuristic].filter(Boolean)));
+		if (merged.length > 0) return merged;
 
 		// Final fallback: search across all visible columns to avoid "search has no effect" on schema-heavy tables.
 		return (m_configs.table || [])

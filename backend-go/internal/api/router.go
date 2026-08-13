@@ -33,6 +33,16 @@ func CatchAll(st *state.AppState) http.HandlerFunc {
 			return
 		}
 
+		if uri == "/api/public/site" || uri == "/public/site" {
+			web.ServePublicSiteData(st, w, r)
+			return
+		}
+
+		if uri == "/api/public/web-vitals" || uri == "/public/web-vitals" {
+			web.ServePublicWebVitals(st, w, r)
+			return
+		}
+
 		// admin.* browser navigates to SPA routes (e.g. GET /login); skip bare-API matching
 		// so those requests reach HandleWebPath and receive index.html (Rust/Java parity).
 		isAPI := isDispatchAPIRequest(uri, host)

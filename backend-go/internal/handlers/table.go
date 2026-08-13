@@ -74,6 +74,7 @@ func (h *TableHandler) HandleGetTableData(params map[string]any, auth *security.
 	if cursor, ok := result["nextCursor"]; ok {
 		resp.Set("nextCursor", cursor)
 	}
+	copyTablePaginationMetadata(resp, result)
 	structRec := h.rm.FindIndexTableCached(appID, table)
 	if structMap, ok := structRec["struct"].(map[string]any); ok {
 		if pk, ok := structMap["fieldsPK"]; ok {
@@ -84,6 +85,17 @@ func (h *TableHandler) HandleGetTableData(params map[string]any, auth *security.
 		}
 	}
 	return resp
+}
+
+func copyTablePaginationMetadata(resp *model.StandardResponse, result map[string]any) {
+	if resp == nil {
+		return
+	}
+	for _, key := range []string{"totalCount", "truncated", "sortTruncated"} {
+		if value, ok := result[key]; ok {
+			resp.Set(key, value)
+		}
+	}
 }
 
 func (h *TableHandler) HandleUpdateTableData(params map[string]any, auth *security.AuthUser) *model.StandardResponse {

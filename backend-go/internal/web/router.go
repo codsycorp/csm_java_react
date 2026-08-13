@@ -21,23 +21,8 @@ func shouldInjectVisibleSSRBody(r *http.Request, query string) bool {
 	case "0", "false", "no", "off":
 		return false
 	}
-
-	ua := strings.ToLower(strings.TrimSpace(r.Header.Get("User-Agent")))
-	if ua == "" {
-		return false
-	}
-
-	botMarkers := []string{
-		"googlebot", "adsbot", "bingbot", "duckduckbot", "baiduspider", "yandexbot", "slurp", "applebot",
-		"facebookexternalhit", "twitterbot", "linkedinbot", "telegrambot", "whatsapp", "discordbot",
-		"crawler", "spider",
-	}
-	for _, marker := range botMarkers {
-		if strings.Contains(ua, marker) {
-			return true
-		}
-	}
-	return false
+	// HTML-first rendering gives browsers and crawlers the same indexable content.
+	return true
 }
 
 func parseAliasTags(raw string) []string {
@@ -332,10 +317,22 @@ func HandleWebPath(st *state.AppState, w http.ResponseWriter, r *http.Request, u
 
 	switch uri {
 	case "/robots.txt":
-		writeTextCached(w, http.StatusOK, "text/plain; charset=utf-8", GenerateRobotsTxt(host), "public, max-age=3600")
+		writeTextCached(w, http.StatusOK, "text/plain; charset=utf-8", GenerateRobotsTxt(host), "public, max-age=3600, s-maxage=10800, stale-while-revalidate=86400")
 		return
 	case "/sitemap.xml":
-		writeTextCached(w, http.StatusOK, "application/xml; charset=utf-8", CachedBuildSitemap(st.RecordManager, host), "public, max-age=300")
+		writeTextCached(w, http.StatusOK, "application/xml; charset=utf-8", CachedBuildSitemapIndex(st.RecordManager, host), "public, max-age=300, s-maxage=900, stale-while-revalidate=3600")
+		return
+	case "/sitemap-pages.xml":
+		writeTextCached(w, http.StatusOK, "application/xml; charset=utf-8", CachedBuildSitemapByKind(st.RecordManager, host, "pages"), "public, max-age=300, s-maxage=900, stale-while-revalidate=3600")
+		return
+	case "/sitemap-categories.xml":
+		writeTextCached(w, http.StatusOK, "application/xml; charset=utf-8", CachedBuildSitemapByKind(st.RecordManager, host, "categories"), "public, max-age=300, s-maxage=900, stale-while-revalidate=3600")
+		return
+	case "/sitemap-details.xml":
+		writeTextCached(w, http.StatusOK, "application/xml; charset=utf-8", CachedBuildSitemapByKind(st.RecordManager, host, "details"), "public, max-age=300, s-maxage=900, stale-while-revalidate=3600")
+		return
+	case "/sitemap-all.xml":
+		writeTextCached(w, http.StatusOK, "application/xml; charset=utf-8", CachedBuildSitemapByKind(st.RecordManager, host, "all"), "public, max-age=300, s-maxage=900, stale-while-revalidate=3600")
 		return
 	case "/feed.xml":
 		ServeFeedXML(st, w, host)
@@ -399,10 +396,19 @@ func HandleWebPath(st *state.AppState, w http.ResponseWriter, r *http.Request, u
 		}
 	}
 
+	rpIndex := ResolveRPIndexPub(st.RecordManager, host)
+	if rpIndex == "" {
+		if HasStaticExtension(uri) {
+			http.NotFound(w, r)
+			return
+		}
+		writeUnknownWebsiteNoIndex(w)
+		return
+	}
+
 	if HasStaticExtension(uri) {
-		rpIndex := ResolveRPIndexPub(st.RecordManager, host)
 		if data, path, enc, ok := readStaticFile(st, uri, rpIndex, r.Header.Get("Accept-Encoding")); ok {
-			writeFileResponse(w, path, data, enc)
+			writeFileResponse(w, r, path, data, enc)
 			return
 		}
 		http.NotFound(w, r)
@@ -415,9 +421,8 @@ func HandleWebPath(st *state.AppState, w http.ResponseWriter, r *http.Request, u
 		w.Header().Set("X-Robots-Tag", "noindex,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1")
 	}
 	setSSREpochHeader(w)
-	w.Header().Add("Vary", "User-Agent")
 	html := RenderPage(ctx, uri, host, query, injectVisibleBody)
-	writeTextCached(w, http.StatusOK, "text/html; charset=utf-8", html, "public, max-age=60, stale-while-revalidate=300, stale-if-error=600")
+	writeTextCached(w, http.StatusOK, "text/html; charset=utf-8", html, "public, max-age=60, s-maxage=300, stale-while-revalidate=900, stale-if-error=86400")
 }
 
 func ServeStatic(st *state.AppState, w http.ResponseWriter, r *http.Request, uri string) {
@@ -435,17 +440,28 @@ func ServeSSR(st *state.AppState, w http.ResponseWriter, r *http.Request, uri, h
 	if redirectCanonicalCategoryPath(st, w, r, uri, host, query) {
 		return
 	}
+	if ResolveRPIndexPub(st.RecordManager, host) == "" {
+		writeUnknownWebsiteNoIndex(w)
+		return
+	}
 	ctx := SSRContext{RM: st.RecordManager}
 	injectVisibleBody := shouldInjectVisibleSSRBody(r, query)
 	if shouldNoIndexSSRQuery(parseQS(query)) {
 		w.Header().Set("X-Robots-Tag", "noindex,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1")
 	}
 	setSSREpochHeader(w)
-	w.Header().Add("Vary", "User-Agent")
 	html := RenderPage(ctx, uri, host, query, injectVisibleBody)
-	writeTextCached(w, http.StatusOK, "text/html; charset=utf-8", html, "public, max-age=60, stale-while-revalidate=300, stale-if-error=600")
+	writeTextCached(w, http.StatusOK, "text/html; charset=utf-8", html, "public, max-age=60, s-maxage=300, stale-while-revalidate=900, stale-if-error=86400")
 }
 
 func setSSREpochHeader(w http.ResponseWriter) {
 	w.Header().Set("X-SSR-Epoch", strconv.FormatUint(cacheepoch.CurrentSSRContentEpoch(), 10))
+}
+
+func writeUnknownWebsiteNoIndex(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("X-Robots-Tag", "noindex,nofollow,max-image-preview:none,max-snippet:0,max-video-preview:0")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusNotFound)
+	_, _ = w.Write([]byte(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="robots" content="noindex,nofollow"><title>404</title></head><body><h1>404 - Website configuration not found</h1></body></html>`))
 }

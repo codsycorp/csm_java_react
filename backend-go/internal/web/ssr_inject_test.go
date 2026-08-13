@@ -28,6 +28,26 @@ func TestInjectSSRVisibleBody_FallsBackBeforeRoot(t *testing.T) {
 	}
 }
 
+func TestShouldInjectSSRVisibleBody_UsesSSRPageData(t *testing.T) {
+	if shouldInjectSSRVisibleBody(map[string]any{
+		"serviceCategory": map[string]any{"slug": "custom-category"},
+	}) {
+		t.Fatal("expected a React-managed category landing to skip the external SSR body")
+	}
+	if shouldInjectSSRVisibleBody(map[string]any{"isSpecialPage": true}) {
+		t.Fatal("expected a CMS-marked special page to skip the external SSR body")
+	}
+	if !shouldInjectSSRVisibleBody(map[string]any{
+		"serviceCategory": map[string]any{"slug": "custom-category"},
+		"serviceDetail":   map[string]any{"slug": "article"},
+	}) {
+		t.Fatal("expected service detail pages to retain their visible SSR body")
+	}
+	if !shouldInjectSSRVisibleBody(nil) {
+		t.Fatal("expected pages without service data to retain their visible SSR body")
+	}
+}
+
 func TestHasVisibleSEOContent_DataDrivenEligibility(t *testing.T) {
 	if hasVisibleSEOContent(map[string]any{}) {
 		t.Fatal("expected empty initial data to be ineligible")
@@ -51,5 +71,25 @@ func TestBuildSSRVisibleBodyHTML_RequiresBodyText(t *testing.T) {
 	})
 	if html != "" {
 		t.Fatalf("expected empty visible body when no page/service content exists, got: %s", html)
+	}
+}
+
+func TestBuildSSRVisibleBodyHTML_UsesHomeCMSContent(t *testing.T) {
+	html := buildSSRVisibleBodyHTML(&preprocessCtx{
+		Title:       "Trang chu",
+		Description: "Mo ta",
+		InitialData: map[string]any{
+			"homeDetailList": []any{
+				map[string]any{"slug": "san-pham", "content": "Khong dung cho trang chu"},
+				map[string]any{"slug": "home", "content": "<p>Noi dung CMS trang chu</p>"},
+			},
+		},
+	})
+
+	if !strings.Contains(html, "Noi dung CMS trang chu") {
+		t.Fatalf("expected homepage CMS content in SSR body, got: %s", html)
+	}
+	if strings.Contains(html, "Khong dung cho trang chu") {
+		t.Fatalf("expected only the home CMS entry in SSR body, got: %s", html)
 	}
 }

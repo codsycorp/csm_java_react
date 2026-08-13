@@ -119,17 +119,45 @@ const sitemapCacheTTL = 5 * time.Minute
 
 // CachedBuildSitemap avoids rebuilding sitemap XML on every crawler hit.
 func CachedBuildSitemap(rm *data.RecordManager, host string) string {
+	return CachedBuildSitemapByKind(rm, host, "all")
+}
+
+func sitemapCacheKey(host, kind string) string {
 	hostKey := strings.TrimSpace(host)
 	if hostKey == "" {
 		hostKey = "default"
 	}
-	if entry, ok := sitemapCache.Load(hostKey); ok {
+	k := strings.TrimSpace(strings.ToLower(kind))
+	if k == "" {
+		k = "all"
+	}
+	return hostKey + ":" + k
+}
+
+func CachedBuildSitemapByKind(rm *data.RecordManager, host, kind string) string {
+	key := sitemapCacheKey(host, kind)
+	if entry, ok := sitemapCache.Load(key); ok {
 		if ce, ok := entry.(*sitemapCacheEntry); ok && time.Now().Before(ce.expires) {
 			return ce.body
 		}
 	}
-	body := BuildSitemap(rm, host)
-	sitemapCache.Store(hostKey, &sitemapCacheEntry{
+	body := BuildSitemapByKind(rm, host, kind)
+	sitemapCache.Store(key, &sitemapCacheEntry{
+		body:    body,
+		expires: time.Now().Add(sitemapCacheTTL),
+	})
+	return body
+}
+
+func CachedBuildSitemapIndex(rm *data.RecordManager, host string) string {
+	key := sitemapCacheKey(host, "index")
+	if entry, ok := sitemapCache.Load(key); ok {
+		if ce, ok := entry.(*sitemapCacheEntry); ok && time.Now().Before(ce.expires) {
+			return ce.body
+		}
+	}
+	body := BuildSitemapIndex(rm, host)
+	sitemapCache.Store(key, &sitemapCacheEntry{
 		body:    body,
 		expires: time.Now().Add(sitemapCacheTTL),
 	})
@@ -451,7 +479,14 @@ func findRouterRPIndexByDomain(rm *data.RecordManager, domain string) string {
 	return bestRP
 }
 
-func BuildSitemap(rm *data.RecordManager, host string) string {
+type sitemapEntry struct {
+	path       string
+	lastmod    string
+	changefreq string
+	priority   string
+}
+
+func BuildSitemapIndex(_rm *data.RecordManager, host string) string {
 	domain := DomainFromHost(host)
 	baseHost := host
 	if baseHost == "" {
@@ -459,12 +494,56 @@ func BuildSitemap(rm *data.RecordManager, host string) string {
 	}
 	baseURL := "https://" + baseHost
 
+	today := time.Now().UTC().Format("2006-01-02")
+	children := []string{"/sitemap-pages.xml", "/sitemap-categories.xml", "/sitemap-details.xml"}
+
 	var xml strings.Builder
 	xml.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
-	xml.WriteString(`<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">`)
-	xml.WriteString(sitemapURLEntry(baseURL+"/", "", "daily", "1.0"))
+	xml.WriteString(`<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">`)
+	for _, child := range children {
+		xml.WriteString("\n  <sitemap>\n    <loc>")
+		xml.WriteString(xmlEscape(baseURL + child))
+		xml.WriteString("</loc>\n    <lastmod>")
+		xml.WriteString(today)
+		xml.WriteString("</lastmod>\n  </sitemap>")
+	}
+	xml.WriteString("\n</sitemapindex>")
+	return xml.String()
+}
 
-	seen := map[string]struct{}{"/": {}}
+func BuildSitemapByKind(rm *data.RecordManager, host, kind string) string {
+	domain := DomainFromHost(host)
+	baseHost := host
+	if baseHost == "" {
+		baseHost = domain
+	}
+	baseURL := "https://" + baseHost
+	entries := collectSitemapEntries(rm, domain, kind)
+	return renderSitemapURLSet(baseURL, entries)
+}
+
+func collectSitemapEntries(rm *data.RecordManager, domain, kind string) []sitemapEntry {
+	k := strings.TrimSpace(strings.ToLower(kind))
+	if k == "" {
+		k = "all"
+	}
+
+	entries := make([]sitemapEntry, 0, 512)
+	add := func(path, lastmod, changefreq, priority string) {
+		entries = append(entries, sitemapEntry{
+			path:       path,
+			lastmod:    lastmod,
+			changefreq: changefreq,
+			priority:   priority,
+		})
+	}
+
+	if k == "all" || k == "pages" {
+		add("/", "", "daily", "1.0")
+		add("/dich-vu", "", "weekly", "0.9")
+		add("/lien-he", "", "weekly", "0.7")
+		add("/ve-chung-toi", "", "weekly", "0.7")
+	}
 
 	routeFilter := model.SearchFilter{
 		Operator: "AND",
@@ -483,41 +562,26 @@ func BuildSitemap(rm *data.RecordManager, host string) string {
 			continue
 		}
 
-		likeDomain := model.SearchFilter{
-			Field:      "domain",
-			FilterType: "like",
-			Value:      domain,
-		}
+		likeDomain := model.SearchFilter{Field: "domain", FilterType: "like", Value: domain}
 
-		if tblServices != "" {
+		if (k == "all" || k == "categories") && tblServices != "" {
 			catFilter := model.SearchFilter{
-				Operator: "AND",
-				Conditions: []model.SearchFilter{
-					model.EqFilter("status", "active"),
-					likeDomain,
-				},
+				Operator:   "AND",
+				Conditions: []model.SearchFilter{model.EqFilter("status", "active"), likeDomain},
 			}
 			for _, r := range rowsFrom(rm.Filter(appID, tblServices, catFilter)) {
 				slug := strings.Trim(strings.TrimSuffix(recordStr(r, "slug"), ".shtml"), " ")
 				if slug == "" {
 					continue
 				}
-				path := canonicalSEOPath("/" + slug)
-				if _, ok := seen[path]; !ok {
-					seen[path] = struct{}{}
-					lm := extractDateOnly(resolveLastmodFromRow(r))
-					xml.WriteString(sitemapURLEntry(baseURL+path, lm, "weekly", "0.8"))
-				}
+				add("/"+slug, extractDateOnly(resolveLastmodFromRow(r)), "weekly", "0.8")
 			}
 		}
 
-		if tblDetail != "" {
+		if (k == "all" || k == "details") && tblDetail != "" {
 			detFilter := model.SearchFilter{
-				Operator: "AND",
-				Conditions: []model.SearchFilter{
-					model.EqFilter("status", "active"),
-					likeDomain,
-				},
+				Operator:   "AND",
+				Conditions: []model.SearchFilter{model.EqFilter("status", "active"), likeDomain},
 			}
 			for _, r := range rowsFrom(rm.Filter(appID, tblDetail, detFilter)) {
 				svcType := strings.TrimSpace(recordStr(r, "service_type"))
@@ -529,18 +593,53 @@ func BuildSitemap(rm *data.RecordManager, host string) string {
 				if svcType != "" {
 					path = "/" + svcType + "/" + slug
 				}
-				path = canonicalSEOPath(path)
-				if _, ok := seen[path]; !ok {
-					seen[path] = struct{}{}
-					lm := extractDateOnly(resolveLastmodFromRow(r))
-					xml.WriteString(sitemapURLEntry(baseURL+path, lm, "weekly", "0.8"))
-				}
+				add(path, extractDateOnly(resolveLastmodFromRow(r)), "weekly", "0.8")
 			}
 		}
 	}
 
+	return entries
+}
+
+func renderSitemapURLSet(baseURL string, entries []sitemapEntry) string {
+	var xml strings.Builder
+	xml.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
+	xml.WriteString(`<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">`)
+
+	seen := map[string]struct{}{}
+	addPath := func(path, lastmod, changefreq, priority string) {
+		path = canonicalSEOPath(path)
+		if path == "" {
+			path = "/"
+		}
+		if _, ok := seen[path]; !ok {
+			seen[path] = struct{}{}
+			xml.WriteString(sitemapURLEntry(baseURL+path, lastmod, changefreq, priority))
+		}
+		for _, prefix := range []string{"/en", "/zh"} {
+			localized := prefix
+			if path != "/" {
+				localized = prefix + path
+			}
+			localized = canonicalSEOPath(localized)
+			if _, ok := seen[localized]; ok {
+				continue
+			}
+			seen[localized] = struct{}{}
+			xml.WriteString(sitemapURLEntry(baseURL+localized, lastmod, changefreq, priority))
+		}
+	}
+
+	for _, e := range entries {
+		addPath(e.path, e.lastmod, e.changefreq, e.priority)
+	}
+
 	xml.WriteString("\n</urlset>")
 	return xml.String()
+}
+
+func BuildSitemap(rm *data.RecordManager, host string) string {
+	return BuildSitemapByKind(rm, host, "all")
 }
 
 func sitemapURLEntry(url, lastmod, changefreq, priority string) string {
@@ -792,7 +891,7 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string, includeVisibleBody
 				normalizedPath, domain, route.AppID, route.TblServiceDetail)
 		}
 	}
-	allowVisibleBody = allowVisibleBody && hasVisibleSEOContent(initialData)
+	allowVisibleBody = allowVisibleBody && hasVisibleSEOContent(initialData) && shouldInjectSSRVisibleBody(initialData)
 	markStage("listing")
 
 	appConfig := map[string]any{"f_logo": route.FLogo, "f_title": pageTitle}
@@ -2818,6 +2917,22 @@ func buildSSRVisibleBodyHTML(ctx *preprocessCtx) string {
 	if bodyHTML == "" {
 		bodyHTML = recordStr(ctx.InitialData, "pageContent")
 	}
+	if bodyHTML == "" {
+		if homeDetails, ok := ctx.InitialData["homeDetailList"].([]any); ok {
+			for _, value := range homeDetails {
+				detail, ok := value.(map[string]any)
+				if !ok {
+					continue
+				}
+				if strings.EqualFold(recordStr(detail, "slug"), "home") || strings.EqualFold(recordStr(detail, "service_type"), "home") {
+					bodyHTML = firstNonEmpty(recordStr(detail, "content"), recordStr(detail, "pageContent"))
+					if bodyHTML != "" {
+						break
+					}
+				}
+			}
+		}
+	}
 	bodyHTML = strings.TrimSpace(stripBetween(stripBetween(bodyHTML, "<script", "</script>"), "<style", "</style>"))
 	bodyText := normalizeMetaText(stripHTMLToText(bodyHTML, 5000), 5000)
 	if bodyText == "" {
@@ -2846,6 +2961,22 @@ func buildSSRVisibleBodyHTML(ctx *preprocessCtx) string {
 	}
 	b.WriteString(`</main>`)
 	return b.String()
+}
+
+// Category landings are rendered by the client within WebsiteLayout. Injecting a second
+// static body outside #root places it ahead of the header and duplicates the page content.
+func shouldInjectSSRVisibleBody(initialData map[string]any) bool {
+	if len(initialData) == 0 {
+		return true
+	}
+	if recordBool(initialData, "isSpecialPage") {
+		return false
+	}
+	if _, hasDetail := initialData["serviceDetail"]; hasDetail {
+		return true
+	}
+	category, hasCategory := initialData["serviceCategory"].(map[string]any)
+	return !hasCategory || len(category) == 0
 }
 
 func hasVisibleSEOContent(initialData map[string]any) bool {
