@@ -1551,6 +1551,9 @@ func loadCategoriesFull(rm *data.RecordManager, route resolvedRoute, domain, lan
 			"attributes_icon":        recordStr(obj, "attributes_icon"),
 			"attributes_color":       recordStr(obj, "attributes_color"),
 			"attributes_description": attributesDescription,
+			"content":                decryptWebContent(rm, recordStr(obj, "content")),
+			"content_en":             decryptWebContent(rm, recordStr(obj, "content_en")),
+			"content_zh":             decryptWebContent(rm, recordStr(obj, "content_zh")),
 		})
 	}
 
@@ -2641,8 +2644,8 @@ func mapDetailLite(rm *data.RecordManager, row map[string]any, lang string) map[
 		"excerpt":          localizedWebContent(rm, row, "excerpt", lang),
 		"excerpt_en":       s("excerpt_en"),
 		"excerpt_zh":       s("excerpt_zh"),
-		"content_en":       s("content_en"),
-		"content_zh":       s("content_zh"),
+		"content_en":       decryptWebContent(rm, s("content_en")),
+		"content_zh":       decryptWebContent(rm, s("content_zh")),
 		"thumbnail":        s("thumbnail"),
 		"cover":            s("cover"),
 		"images":           s("images"),
@@ -2699,8 +2702,8 @@ func mapServiceCategory(rm *data.RecordManager, row map[string]any, lang string)
 		"seo_meta":       s("seo_meta"),
 		"parent_id":      s("parent_id"),
 		"content":        localizedWebContent(rm, row, "content", lang),
-		"content_en":     s("content_en"),
-		"content_zh":     s("content_zh"),
+		"content_en":     decryptWebContent(rm, s("content_en")),
+		"content_zh":     decryptWebContent(rm, s("content_zh")),
 		"description":    localizedWebContent(rm, row, "description", lang),
 		"description_en": s("description_en"),
 		"description_zh": s("description_zh"),
@@ -3009,14 +3012,17 @@ func injectSSRVisibleBody(html *string, bodyHTML string) {
 		return
 	}
 
-	if strings.Contains(*html, "<!-- SSR_CONTENT_ANCHOR -->") {
-		*html = strings.Replace(*html, "<!-- SSR_CONTENT_ANCHOR -->", bodyHTML, 1)
+	lower := strings.ToLower(*html)
+	// React owns every node inside #root. A standalone body fragment can only be
+	// placed before or after that application shell, neither of which matches the
+	// WebsiteLayout position. The page data and structured metadata are already
+	// injected separately for React and crawlers.
+	if strings.Contains(lower, `<div id="root"`) {
 		return
 	}
 
-	lower := strings.ToLower(*html)
-	if rootPos := strings.Index(lower, `<div id="root"`); rootPos >= 0 {
-		*html = (*html)[:rootPos] + bodyHTML + "\n" + (*html)[rootPos:]
+	if strings.Contains(*html, "<!-- SSR_CONTENT_ANCHOR -->") {
+		*html = strings.Replace(*html, "<!-- SSR_CONTENT_ANCHOR -->", bodyHTML, 1)
 		return
 	}
 

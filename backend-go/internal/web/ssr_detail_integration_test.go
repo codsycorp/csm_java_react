@@ -52,7 +52,7 @@ func TestFindActiveServiceDetail_WuwebSample(t *testing.T) {
 	}
 }
 
-func TestBuildSSRHTML_ServiceDetailInjected(t *testing.T) {
+func TestBuildSSRHTML_ServiceDetailUsesReactLayout(t *testing.T) {
 	rm, cleanup := pebbleDataAvailable(t)
 	defer cleanup()
 
@@ -69,11 +69,8 @@ func TestBuildSSRHTML_ServiceDetailInjected(t *testing.T) {
 		!strings.Contains(html, `"currentPagePath": "/bat-dong-san/`+slug+`.shtml"`) {
 		t.Fatalf("SSR HTML currentPagePath should keep .shtml like Java, got html snippet without expected path")
 	}
-	if !strings.Contains(html, `<main id="ssr-content"`) {
-		t.Fatalf("SSR HTML missing visible body content block for %s", uri)
-	}
-	if !strings.Contains(html, `class="ssr-content__body"`) {
-		t.Fatalf("SSR HTML missing rendered body section for %s", uri)
+	if strings.Contains(html, `<main id="ssr-content"`) {
+		t.Fatalf("SSR HTML must not inject content outside the React layout for %s", uri)
 	}
 	if !strings.Contains(html, slug) {
 		t.Fatalf("SSR HTML missing slug %q", slug)

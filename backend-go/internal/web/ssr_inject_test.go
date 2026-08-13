@@ -5,26 +5,33 @@ import (
 	"testing"
 )
 
-func TestInjectSSRVisibleBody_UsesAnchorWhenPresent(t *testing.T) {
+func TestInjectSSRVisibleBody_SkipsReactRootEvenWhenAnchorExists(t *testing.T) {
 	html := `<!doctype html><html><body><noscript>x</noscript><!-- SSR_CONTENT_ANCHOR --><div id="root"></div></body></html>`
 	injectSSRVisibleBody(&html, `<main id="ssr-content">A</main>`)
 
-	if strings.Contains(html, "SSR_CONTENT_ANCHOR") {
-		t.Fatalf("anchor placeholder should be replaced")
+	if strings.Contains(html, `<main id="ssr-content">A</main>`) {
+		t.Fatalf("React shell must not receive an external SSR body, got: %s", html)
 	}
-	if !strings.Contains(html, `<main id="ssr-content">A</main><div id="root">`) {
-		t.Fatalf("expected content injected at anchor before root, got: %s", html)
+	if !strings.Contains(html, "<!-- SSR_CONTENT_ANCHOR -->") {
+		t.Fatalf("React shell anchor should remain untouched, got: %s", html)
 	}
 }
 
-func TestInjectSSRVisibleBody_FallsBackBeforeRoot(t *testing.T) {
+func TestInjectSSRVisibleBody_SkipsReactRootWithoutAnchor(t *testing.T) {
 	html := `<!doctype html><html><body><div class="x"></div><div id="root"></div></body></html>`
 	injectSSRVisibleBody(&html, `<main id="ssr-content">B</main>`)
 
-	idxContent := strings.Index(html, `<main id="ssr-content">B</main>`)
-	idxRoot := strings.Index(html, `<div id="root">`)
-	if idxContent < 0 || idxRoot < 0 || idxContent > idxRoot {
-		t.Fatalf("expected content before root, got: %s", html)
+	if strings.Contains(html, `<main id="ssr-content">B</main>`) {
+		t.Fatalf("React shell must not receive an external SSR body, got: %s", html)
+	}
+}
+
+func TestInjectSSRVisibleBody_UsesAnchorWithoutReactRoot(t *testing.T) {
+	html := `<!doctype html><html><body><!-- SSR_CONTENT_ANCHOR --></body></html>`
+	injectSSRVisibleBody(&html, `<main id="ssr-content">C</main>`)
+
+	if !strings.Contains(html, `<main id="ssr-content">C</main>`) {
+		t.Fatalf("expected non-React shell anchor to receive SSR body, got: %s", html)
 	}
 }
 
