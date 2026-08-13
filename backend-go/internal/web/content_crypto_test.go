@@ -44,7 +44,7 @@ func TestSSRContentMappingsExposeDecryptedLocalizedHTML(t *testing.T) {
 	}
 
 	detail := mapDetailLite(rm, row, "vi")
-	for _, field := range []string{"content_en", "content_zh"} {
+	for _, field := range []string{"content", "content_en", "content_zh"} {
 		if !strings.Contains(recordStr(detail, field), "<article>") {
 			t.Fatalf("detail %s was not decrypted: %q", field, recordStr(detail, field))
 		}

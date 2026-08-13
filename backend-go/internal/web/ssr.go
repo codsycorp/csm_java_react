@@ -2644,6 +2644,7 @@ func mapDetailLite(rm *data.RecordManager, row map[string]any, lang string) map[
 		"excerpt":          localizedWebContent(rm, row, "excerpt", lang),
 		"excerpt_en":       s("excerpt_en"),
 		"excerpt_zh":       s("excerpt_zh"),
+		"content":          localizedWebContent(rm, row, "content", lang),
 		"content_en":       decryptWebContent(rm, s("content_en")),
 		"content_zh":       decryptWebContent(rm, s("content_zh")),
 		"thumbnail":        s("thumbnail"),

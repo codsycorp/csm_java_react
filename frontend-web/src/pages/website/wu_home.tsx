@@ -491,7 +491,7 @@ export default function WuHome() {
       {homeCmsContent ? (
         <section style={{ padding: '16px 24px 32px', background: 'var(--bg-primary)' }}>
           <div style={{ maxWidth: 1100, margin: '0 auto', border: '1px solid var(--card-border)', borderRadius: 16, background: 'var(--card-bg)', padding: 24 }}>
-            <div style={{ color: 'var(--text-primary)', lineHeight: 1.8 }} dangerouslySetInnerHTML={{ __html: homeCmsContent }} />
+            <div className="cms-content" style={{ color: 'var(--text-primary)', lineHeight: 1.8 }} dangerouslySetInnerHTML={{ __html: homeCmsContent }} />
           </div>
         </section>
       ) : null}

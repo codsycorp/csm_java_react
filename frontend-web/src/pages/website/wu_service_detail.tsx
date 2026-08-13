@@ -954,6 +954,7 @@ const GenericDetail = ({ post, t }: { post: ServicePost, t: any }) => {
               React.createElement(Title, { level: 3, style: { color: 'var(--text-primary)' }, key: 'desc-title' }, t('website.services.detail.description', 'Mô tả dịch vụ')),
               postContent 
                 ? React.createElement('div', { 
+                    className: 'cms-content',
                     style: { color: 'var(--text-primary)', lineHeight: 1.8 }, 
                     dangerouslySetInnerHTML: { __html: sanitizeHtmlForRender(decodeHtml(postContent) || '') }, 
                     key: 'desc-html' 
@@ -1025,7 +1026,7 @@ const SoftwareDetail = ({ post, t }: { post: ServicePost, t: any }) => {
     React.createElement(Divider, null),
     React.createElement(Title, { level: 4, style: { color: 'var(--text-primary)' } }, t('website.services.detail.features', 'Các tính năng nổi bật')),
     (postContent
-      ? React.createElement('div', { style: { color: 'var(--text-primary)', lineHeight: 1.7 }, dangerouslySetInnerHTML: { __html: sanitizeHtmlForRender(decodeHtml(postContent) || '') } })
+      ? React.createElement('div', { className: 'cms-content', style: { color: 'var(--text-primary)', lineHeight: 1.7 }, dangerouslySetInnerHTML: { __html: sanitizeHtmlForRender(decodeHtml(postContent) || '') } })
       : React.createElement(Paragraph, { style: { color: 'var(--text-secondary)' } }, t('website.services.detail.no_description', 'Chưa có mô tả chi tiết.')))
   );
 };
@@ -1145,7 +1146,7 @@ const RealEstateDetail = ({ post, t }: { post: ServicePost, t: any }) => {
   };
 
   const htmlBlock = postContent
-    ? React.createElement('div', { key: 'html-block', style: { color: 'var(--text-primary)', lineHeight: 1.7 }, dangerouslySetInnerHTML: { __html: sanitizeHtmlForRender(decodeHtml(postContent) || '') } })
+    ? React.createElement('div', { key: 'html-block', className: 'cms-content', style: { color: 'var(--text-primary)', lineHeight: 1.7 }, dangerouslySetInnerHTML: { __html: sanitizeHtmlForRender(decodeHtml(postContent) || '') } })
     : React.createElement(Paragraph, { key: 'no-desc', style: { color: 'var(--text-secondary)' } }, t('website.services.detail.no_description', 'Chưa có mô tả chi tiết.'));
   
   return React.createElement(
@@ -1532,7 +1533,7 @@ const BeautyDetail = ({ post, t }: { post: ServicePost, t: any }) => {
     React.createElement(Divider, null),
     React.createElement(Title, { level: 4, style: { color: 'var(--text-primary)' }, key: 'ing-title' }, t('website.services.detail.ingredients_usage', 'Thành phần & Công dụng')),
     (postContent
-      ? React.createElement('div', { key: 'ing-content', style: { color: 'var(--text-primary)', lineHeight: 1.7 }, dangerouslySetInnerHTML: { __html: sanitizeHtmlForRender(decodeHtml(postContent) || '') } })
+      ? React.createElement('div', { key: 'ing-content', className: 'cms-content', style: { color: 'var(--text-primary)', lineHeight: 1.7 }, dangerouslySetInnerHTML: { __html: sanitizeHtmlForRender(decodeHtml(postContent) || '') } })
       : React.createElement(Paragraph, { key: 'ing-content', style: { color: 'var(--text-secondary)' } }, t('website.services.detail.no_description', 'Chưa có mô tả chi tiết.')))
   );
 };
@@ -1606,7 +1607,7 @@ const BookingDetail = ({ post, t }: { post: ServicePost, t: any }) => {
     React.createElement(Divider, null),
     React.createElement(Title, { level: 4, style: { color: 'var(--text-primary)' }, key: 'desc-title' }, t('website.services.detail.description', 'Mô tả dịch vụ')),
     (postContent
-      ? React.createElement('div', { key: 'desc-content', style: { color: 'var(--text-primary)', lineHeight: 1.7 }, dangerouslySetInnerHTML: { __html: sanitizeHtmlForRender(decodeHtml(postContent) || '') } })
+      ? React.createElement('div', { key: 'desc-content', className: 'cms-content', style: { color: 'var(--text-primary)', lineHeight: 1.7 }, dangerouslySetInnerHTML: { __html: sanitizeHtmlForRender(decodeHtml(postContent) || '') } })
       : React.createElement(Paragraph, { key: 'desc-content', style: { color: 'var(--text-secondary)' } }, t('website.services.detail.no_description', 'Chưa có mô tả chi tiết.'))),
     React.createElement(Modal, {
       open: modalOpen,
@@ -1711,7 +1712,7 @@ const CarRentalDetail = ({ post, t }: { post: ServicePost, t: any }) => {
     React.createElement(Divider, null),
     React.createElement(Title, { level: 4, key: 'terms-title' }, t('website.services.detail.rental_terms', 'Giá & Điều khoản thuê')),
     (postContent
-      ? React.createElement('div', { key: 'terms-content', style: { color: 'var(--text-primary)', lineHeight: 1.7 }, dangerouslySetInnerHTML: { __html: sanitizeHtmlForRender(decodeHtml(postContent) || '') } })
+      ? React.createElement('div', { key: 'terms-content', className: 'cms-content', style: { color: 'var(--text-primary)', lineHeight: 1.7 }, dangerouslySetInnerHTML: { __html: sanitizeHtmlForRender(decodeHtml(postContent) || '') } })
       : React.createElement(Paragraph, { key: 'terms-content', style: { color: 'var(--text-secondary)' } }, t('website.services.detail.no_description', 'Chưa có mô tả chi tiết.')))
   );
 };
