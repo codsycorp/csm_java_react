@@ -741,6 +741,79 @@ if (typeof window !== 'undefined') {
       }
     };
 
+    const businessPartnershipSeo = {
+      'bat-dong-san': {
+        attributes_title: 'Bất Động Sản: Phân Tích Dự Án, Mua Bán Và Cho Thuê',
+        attributes_title_en: 'Real Estate: Project Analysis, Buying, Selling and Renting',
+        attributes_title_zh: '房地产：项目分析、买卖与出租',
+        attributes_description: 'Phân tích dự án, thị trường, mua bán và cho thuê bất động sản với dữ liệu rõ ràng, nội dung thực tế và tư vấn từ Lê Anh CSM.',
+        attributes_description_en: 'Real estate project analysis, market information, buying, selling and renting guidance with practical data from Le Anh CSM.',
+        attributes_description_zh: '提供房地产项目分析、市场信息、买卖与出租指南，以清晰数据和实际经验为基础。',
+        attributes_keywords: 'bất động sản, phân tích dự án, mua bán nhà đất, cho thuê căn hộ, tư vấn bất động sản, Technical SEO bất động sản',
+        attributes_keywords_en: 'real estate, project analysis, property buying, apartment rental, real estate marketing, Technical SEO',
+        attributes_keywords_zh: '房地产, 项目分析, 房产买卖, 公寓出租, 房地产营销, 技术SEO',
+        content: `<article><h2>Bất Động Sản Và Giải Pháp Marketing Dữ Liệu</h2><p>Chuyên mục cung cấp thông tin và công cụ hỗ trợ doanh nghiệp, chủ đầu tư, môi giới và người mua tham khảo dữ liệu bất động sản một cách rõ ràng. Nội dung tập trung vào phân tích dự án, vị trí, tiện ích, pháp lý, tiến độ, giá tham khảo và bài toán vận hành nội dung.</p><h3>Các nội dung chính</h3><ul><li>Phân tích dự án căn hộ, nhà phố, đất nền và shophouse.</li><li>Hướng dẫn chuẩn bị nội dung mua bán, cho thuê và chuyển nhượng minh bạch.</li><li>Technical SEO, landing page, quản lý lead và tự động hóa marketing bất động sản.</li><li>Dashboard theo dõi traffic, lead, chi phí quảng cáo và tỷ lệ chuyển đổi.</li></ul><h3>Giải pháp theo quy trình riêng</h3><p>Lê Anh CSM có thể khảo sát quy trình đăng tin, chăm sóc khách hàng và quản lý dữ liệu hiện tại để xây dựng website, CRM, tool lọc dữ liệu hoặc hệ thống báo cáo phù hợp. Nội dung chỉ mang tính tham khảo, không cam kết lợi nhuận hay kết quả giao dịch.</p><h3>Liên hệ</h3><p><strong>Lê Anh CSM - 0388.610.885</strong> | Email: lleducanh@gmail.com | Bình Thạnh, TP.HCM.</p></article>`,
+        content_en: `<article><h2>Real Estate and Data-Driven Marketing Solutions</h2><p>This category provides practical information and tools for developers, agents, property owners and buyers. Topics cover project analysis, location, amenities, legal status, delivery progress, reference pricing and content operations.</p><h3>Main topics</h3><ul><li>Analysis of apartments, houses, land and shophouses.</li><li>Clear content workflows for buying, selling, renting and transfers.</li><li>Technical SEO, landing pages, lead management and real estate marketing automation.</li><li>Dashboards for traffic, leads, advertising cost and conversion tracking.</li></ul><h3>Custom business workflows</h3><p>Le Anh CSM can review your listing, customer care and data process to build a suitable website, CRM, filtering tool or reporting system. Content is for reference only and does not guarantee profit or transaction results.</p><h3>Contact</h3><p><strong>Le Anh CSM - 0388.610.885</strong> | Email: lleducanh@gmail.com | Binh Thanh District, Ho Chi Minh City.</p></article>`,
+        content_zh: `<article><h2>房地产与数据驱动营销解决方案</h2><p>本栏目为开发商、中介、业主和购房者提供清晰、实用的房地产信息与工具。内容包括项目分析、位置、配套、法律状态、交付进度、参考价格和内容运营。</p><h3>主要内容</h3><ul><li>公寓、住宅、土地和商铺项目分析。</li><li>买卖、出租和转让的信息发布流程。</li><li>房地产技术SEO、落地页、线索管理和营销自动化。</li><li>跟踪流量、客户线索、广告成本和转化率的数据看板。</li></ul><h3>定制业务流程</h3><p>Le Anh CSM 可以分析您的发布、客户服务和数据流程，设计适合的网页、CRM、筛选工具或报表系统。内容仅供参考，不保证利润或交易结果。</p><h3>联系方式</h3><p><strong>Le Anh CSM - 0388.610.885</strong> | 邮箱：lleducanh@gmail.com | 越南胡志明市平盛郡。</p></article>`,
+      },
+      'lam-dep-my-pham': {
+        attributes_title: 'Mỹ Phẩm Và Làm Đẹp: Review, Spa, Skincare Và Marketing',
+        attributes_title_en: 'Beauty and Cosmetics: Reviews, Spa, Skincare and Marketing',
+        attributes_title_zh: '美容与化妆品：测评、水疗、护肤与营销',
+        attributes_description: 'Review mỹ phẩm, chăm sóc da, spa và tự động hóa marketing cho thương hiệu làm đẹp cùng giải pháp dữ liệu từ Lê Anh CSM.',
+        attributes_description_en: 'Beauty reviews, skincare, spa content and marketing automation solutions for beauty brands by Le Anh CSM.',
+        attributes_description_zh: '提供美容测评、护肤、水疗内容和美容品牌营销自动化解决方案。',
+        attributes_keywords: 'mỹ phẩm, làm đẹp, review skincare, spa, chăm sóc da, marketing mỹ phẩm, tự động hóa nội dung',
+        attributes_keywords_en: 'cosmetics, beauty, skincare review, spa marketing, beauty automation, content engine',
+        attributes_keywords_zh: '化妆品, 美容, 护肤测评, 水疗营销, 美容自动化, 内容系统',
+        content: `<article><h2>Mỹ Phẩm, Làm Đẹp Và Nội Dung Có Cơ Sở</h2><p>Chuyên mục dành cho người quan tâm đến mỹ phẩm, chăm sóc da, spa, salon và hoạt động marketing ngành làm đẹp. Nội dung ưu tiên trải nghiệm thực tế, thành phần, cách dùng, đối tượng phù hợp và lưu ý an toàn thay vì lời quảng cáo quá mức.</p><h3>Dành cho thương hiệu và cơ sở làm đẹp</h3><ul><li>Xây dựng website giới thiệu dịch vụ, sản phẩm và đặt lịch.</li><li>Tạo nội dung review, hướng dẫn chăm sóc da và FAQ theo nhóm khách hàng.</li><li>Tự động hóa quản lý lịch hẹn, lead, tin nhắn và nội dung mạng xã hội.</li><li>Đo lường traffic, khách hàng tiềm năng và tỷ lệ quay lại.</li></ul><h3>Liên hệ tư vấn</h3><p>Lê Anh CSM nhận tư vấn Technical SEO, AI Content Engine, tool quản lý dữ liệu và quy trình marketing phù hợp từng thương hiệu. Thông tin mỹ phẩm cần được kiểm chứng theo nguồn chính thức và không thay thế tư vấn y tế.</p><p><strong>Lê Anh CSM - 0388.610.885</strong> | Email: lleducanh@gmail.com.</p></article>`,
+        content_en: `<article><h2>Beauty, Cosmetics and Evidence-Based Content</h2><p>This category covers cosmetics, skincare, spa, salon and beauty marketing. Content focuses on real use, ingredients, application, suitable audiences and safety notes instead of exaggerated advertising claims.</p><h3>For beauty brands and service providers</h3><ul><li>Websites for services, products and online booking.</li><li>Review, skincare guide and FAQ content for different audiences.</li><li>Automation for appointments, leads, messages and social content.</li><li>Traffic, lead and repeat-customer measurement.</li></ul><h3>Contact</h3><p>Le Anh CSM provides Technical SEO, AI Content Engine, data tools and marketing workflow consulting. Product claims should be verified with official sources and do not replace medical advice.</p><p><strong>Le Anh CSM - 0388.610.885</strong> | Email: lleducanh@gmail.com.</p></article>`,
+        content_zh: `<article><h2>美容、化妆品与可靠内容</h2><p>本栏目关注化妆品、护肤、水疗、美容院和美容行业营销。内容重视真实使用、成分、用法、适用人群和安全提示，不使用夸大的宣传。</p><h3>适合美容品牌和服务机构</h3><ul><li>产品、服务和在线预约网站。</li><li>按不同客户群制作测评、护肤指南和常见问题内容。</li><li>自动化预约、线索、消息和社交媒体内容。</li><li>跟踪流量、客户线索和复购情况。</li></ul><h3>联系方式</h3><p>Le Anh CSM 提供技术SEO、AI内容系统、数据工具和营销流程咨询。产品功效应以官方资料为准，内容不替代医疗建议。</p><p><strong>Le Anh CSM - 0388.610.885</strong> | 邮箱：lleducanh@gmail.com。</p></article>`,
+      },
+      'cho-thue-xe': {
+        attributes_title: 'Cho Thuê Xe 4-7 Chỗ: Đặt Xe, Tài Xế Và Vận Hành Dịch Vụ',
+        attributes_title_en: '4-7 Seat Car Rental: Booking, Drivers and Service Operations',
+        attributes_title_zh: '4至7座租车：预订、司机与服务运营',
+        attributes_description: 'Dịch vụ cho thuê xe 4-7 chỗ, xe có tài xế, đặt xe và công cụ quản lý khách hàng, lịch xe, nội dung marketing.',
+        attributes_description_en: '4-7 seat car rental, driver services, booking and customer, vehicle schedule and marketing tools.',
+        attributes_description_zh: '提供4至7座租车、带司机服务、预约以及客户和车辆日程管理工具。',
+        attributes_keywords: 'cho thuê xe, thuê xe 4 chỗ, thuê xe 7 chỗ, xe có tài xế, đặt xe, quản lý lịch xe, marketing dịch vụ xe',
+        attributes_keywords_en: 'car rental, 4 seat car, 7 seat car, chauffeur service, vehicle booking, fleet schedule',
+        attributes_keywords_zh: '租车, 4座汽车, 7座汽车, 带司机租车, 车辆预约, 车辆日程',
+        content: `<article><h2>Cho Thuê Xe 4-7 Chỗ Và Đặt Xe Thuận Tiện</h2><p>Chuyên mục cung cấp thông tin cho nhu cầu thuê xe 4-7 chỗ, xe có tài xế, đưa đón sân bay, đi công tác, du lịch gia đình và hợp đồng theo ngày. Người dùng nên xác nhận loại xe, thời gian, lộ trình, chi phí và điều kiện dịch vụ trước khi đặt.</p><h3>Giải pháp cho đơn vị vận tải</h3><ul><li>Website nhận yêu cầu thuê xe và đặt lịch trực tuyến.</li><li>Quản lý tài xế, xe, lịch chạy, khách hàng và trạng thái chuyến.</li><li>Tự động gửi thông báo, lưu lịch sử và tổng hợp báo cáo.</li><li>SEO địa phương và nội dung giới thiệu dịch vụ rõ ràng.</li></ul><h3>Liên hệ</h3><p>Lê Anh CSM có thể xây dựng tool đặt xe, dashboard vận hành và quy trình marketing theo mô hình của từng đơn vị. Giá và tình trạng xe cần được xác nhận trực tiếp trước khi sử dụng dịch vụ.</p><p><strong>Lê Anh CSM - 0388.610.885</strong> | Email: lleducanh@gmail.com.</p></article>`,
+        content_en: `<article><h2>4-7 Seat Car Rental and Convenient Booking</h2><p>This category covers 4-7 seat rentals, chauffeur services, airport transfers, business trips, family travel and daily contracts. Confirm the vehicle, schedule, route, price and service terms before booking.</p><h3>Solutions for transport providers</h3><ul><li>Websites for rental requests and online booking.</li><li>Management of drivers, vehicles, schedules, customers and trip status.</li><li>Automated notifications, history and operational reports.</li><li>Local SEO and clear service content.</li></ul><h3>Contact</h3><p>Le Anh CSM can build booking tools, operations dashboards and marketing workflows for each transport model. Vehicle availability and pricing should be confirmed directly.</p><p><strong>Le Anh CSM - 0388.610.885</strong> | Email: lleducanh@gmail.com.</p></article>`,
+        content_zh: `<article><h2>4至7座租车与便捷预约</h2><p>本栏目介绍4至7座租车、带司机、机场接送、商务出行、家庭旅行和按日租车。预约前请确认车型、时间、路线、价格和服务条款。</p><h3>适合运输服务商</h3><ul><li>租车需求和在线预约网站。</li><li>管理司机、车辆、日程、客户和行程状态。</li><li>自动通知、历史记录和运营报表。</li><li>本地SEO和清晰的服务内容。</li></ul><h3>联系方式</h3><p>Le Anh CSM 可根据运输业务建立预约工具、运营看板和营销流程。车辆状态和价格应直接确认。</p><p><strong>Le Anh CSM - 0388.610.885</strong> | 邮箱：lleducanh@gmail.com。</p></article>`,
+      },
+      'booking-online': {
+        attributes_title: 'Đặt Lịch Online: Phần Mềm Booking Cho Mọi Dịch Vụ',
+        attributes_title_en: 'Online Booking: Reservation Software for Service Businesses',
+        attributes_title_zh: '在线预约：适合服务行业的预约软件',
+        attributes_description: 'Giải pháp đặt lịch online cho phòng khám, spa, salon, nhà hàng và doanh nghiệp dịch vụ, tích hợp quản lý lịch và khách hàng.',
+        attributes_description_en: 'Online booking solutions for clinics, spas, salons, restaurants and service businesses with schedule and customer management.',
+        attributes_description_zh: '为诊所、水疗、美容院、餐厅和服务企业提供在线预约、日程及客户管理方案。',
+        attributes_keywords: 'đặt lịch online, phần mềm booking, đặt lịch spa, đặt lịch phòng khám, đặt bàn nhà hàng, quản lý lịch hẹn, CRM dịch vụ',
+        attributes_keywords_en: 'online booking, booking software, spa booking, clinic appointment, restaurant reservation, service CRM',
+        attributes_keywords_zh: '在线预约, 预约软件, 水疗预约, 诊所预约, 餐厅预订, 服务CRM',
+        content: `<article><h2>Đặt Lịch Online Cho Doanh Nghiệp Dịch Vụ</h2><p>Đặt lịch online giúp khách hàng chọn thời gian phù hợp và giúp doanh nghiệp giảm việc ghi chép thủ công. Giải pháp có thể áp dụng cho phòng khám, spa, salon, nhà hàng, trung tâm đào tạo, dịch vụ sửa chữa và nhiều mô hình cần quản lý lịch hẹn.</p><h3>Tính năng có thể xây dựng</h3><ul><li>Lịch đặt hẹn theo nhân viên, phòng, bàn, xe hoặc loại dịch vụ.</li><li>Xác nhận, nhắc lịch, đổi lịch và lưu lịch sử khách hàng.</li><li>Quản lý trạng thái, phân loại lead và kết nối CRM.</li><li>Dashboard theo dõi số lịch, tỷ lệ đến và hiệu quả marketing.</li></ul><h3>Tư vấn theo quy trình thực tế</h3><p>Lê Anh CSM nhận khảo sát quy trình hiện tại và xây tool booking phù hợp, có thể tích hợp website, mạng xã hội, API và hệ thống nội bộ. Việc thu thập dữ liệu cần có thông báo và quyền truy cập phù hợp.</p><p><strong>Lê Anh CSM - 0388.610.885</strong> | Email: lleducanh@gmail.com.</p></article>`,
+        content_en: `<article><h2>Online Booking for Service Businesses</h2><p>Online booking lets customers choose a suitable time while reducing manual scheduling. It can support clinics, spas, salons, restaurants, training centers, repair services and other appointment-based businesses.</p><h3>Possible features</h3><ul><li>Schedules by staff, room, table, vehicle or service type.</li><li>Confirmation, reminders, rescheduling and customer history.</li><li>Status management, lead classification and CRM integration.</li><li>Dashboards for bookings, attendance and marketing performance.</li></ul><h3>Workflow consulting</h3><p>Le Anh CSM reviews the current process and builds a booking tool that can integrate with websites, social channels, APIs and internal systems. Data collection should use appropriate notice and access permissions.</p><p><strong>Le Anh CSM - 0388.610.885</strong> | Email: lleducanh@gmail.com.</p></article>`,
+        content_zh: `<article><h2>服务企业在线预约</h2><p>在线预约让客户选择合适时间，也能减少人工登记。适用于诊所、水疗、美容院、餐厅、培训中心、维修服务和其他需要管理预约的企业。</p><h3>可以建设的功能</h3><ul><li>按员工、房间、餐桌、车辆或服务类型安排日程。</li><li>确认、提醒、改期和客户历史记录。</li><li>状态管理、线索分类和CRM整合。</li><li>统计预约、到店率和营销效果的数据看板。</li></ul><h3>按实际流程定制</h3><p>Le Anh CSM 可分析现有流程，建设连接网站、社交媒体、API和内部系统的预约工具。收集数据时应提供适当说明并控制访问权限。</p><p><strong>Le Anh CSM - 0388.610.885</strong> | 邮箱：lleducanh@gmail.com。</p></article>`,
+      },
+      'phan-mem': {
+        attributes_title: 'Phần Mềm Và Giải Pháp Công Nghệ Theo Bài Toán Doanh Nghiệp',
+        attributes_title_en: 'Software and Technology Solutions for Business Problems',
+        attributes_title_zh: '面向企业业务问题的软件与技术解决方案',
+        attributes_description: 'Tư vấn phần mềm, AI Automation, Technical SEO, tích hợp API, Data Pipeline và dashboard theo quy trình thực tế của doanh nghiệp.',
+        attributes_description_en: 'Software consulting, AI automation, Technical SEO, API integration, data pipelines and dashboards for real business workflows.',
+        attributes_description_zh: '提供软件咨询、AI自动化、技术SEO、API整合、数据管道和企业数据看板。',
+        attributes_keywords: 'phần mềm doanh nghiệp, giải pháp công nghệ, AI Automation, Technical SEO, tích hợp API, Data Pipeline, dashboard KPI ROI',
+        attributes_keywords_en: 'business software, technology solutions, AI automation, Technical SEO, API integration, data pipeline, KPI dashboard',
+        attributes_keywords_zh: '企业软件, 技术解决方案, AI自动化, 技术SEO, API整合, 数据管道, KPI看板',
+        content: `<article><h2>Phần Mềm Giải Quyết Bài Toán Kinh Doanh</h2><p>Phần mềm hiệu quả bắt đầu từ quy trình và mục tiêu cụ thể, không bắt đầu từ việc chọn công nghệ. Chuyên mục này tập trung vào giải pháp web-app, mobile-app, desktop-app, CRM, API, AI Automation và dashboard giúp doanh nghiệp giảm thao tác lặp lại, kiểm soát dữ liệu và đo lường kết quả.</p><h3>Các giải pháp có thể triển khai</h3><ul><li>Phần mềm quản lý khách hàng, đơn hàng, lịch hẹn và quy trình nội bộ.</li><li>Tích hợp API, đồng bộ dữ liệu đa nền tảng và Data Pipeline.</li><li>AI Local, AI Content Engine và tự động hóa marketing có kiểm duyệt.</li><li>Technical SEO, website, landing page và dashboard KPI/ROI.</li><li>Tool theo yêu cầu từ quy trình Excel, báo cáo hoặc cách tính riêng.</li></ul><h3>Quy trình tư vấn</h3><p>Lê Anh CSM bắt đầu bằng việc tìm hiểu bài toán, dữ liệu mẫu, quyền truy cập, yêu cầu bảo mật và chỉ số thành công. Sau đó triển khai bản thử nghiệm, kiểm tra đối chiếu rồi mới mở rộng hệ thống.</p><p><strong>Liên hệ Lê Anh CSM - 0388.610.885</strong> | Email: lleducanh@gmail.com | Bình Thạnh, TP.HCM.</p></article>`,
+        content_en: `<article><h2>Software That Solves Business Problems</h2><p>Effective software starts with a clear workflow and outcome, not with a technology choice. This category covers web, mobile and desktop apps, CRM, APIs, AI automation and dashboards that reduce repetitive work, improve data control and measure results.</p><h3>Solutions we can build</h3><ul><li>Customer, order, appointment and internal workflow management.</li><li>API integration, cross-platform synchronization and data pipelines.</li><li>Private AI, AI content engines and reviewed marketing automation.</li><li>Technical SEO, websites, landing pages and KPI/ROI dashboards.</li><li>Custom tools based on Excel, reports or business-specific calculations.</li></ul><h3>Consulting process</h3><p>Le Anh CSM starts by understanding the business problem, sample data, permissions, security requirements and success metrics. A pilot is tested before the system is expanded.</p><p><strong>Contact Le Anh CSM - 0388.610.885</strong> | Email: lleducanh@gmail.com | Binh Thanh District, Ho Chi Minh City.</p></article>`,
+        content_zh: `<article><h2>解决企业业务问题的软件</h2><p>有效的软件应从清晰流程和目标开始，而不是先选择技术。本栏目介绍Web、移动端和桌面端应用、CRM、API、AI自动化及数据看板，帮助企业减少重复操作、控制数据并衡量结果。</p><h3>可以实施的方案</h3><ul><li>客户、订单、预约和内部流程管理软件。</li><li>API整合、跨平台同步和数据管道。</li><li>企业内部AI、AI内容系统和经过审核的营销自动化。</li><li>技术SEO、网站、落地页和KPI/ROI看板。</li><li>根据Excel、报表或企业计算方式制作定制工具。</li></ul><h3>咨询流程</h3><p>Le Anh CSM 先了解业务问题、样例数据、权限、安全要求和成功指标，再通过小型试点验证后扩展系统。</p><p><strong>联系 Le Anh CSM - 0388.610.885</strong> | 邮箱：lleducanh@gmail.com | 越南胡志明市平盛郡。</p></article>`,
+      },
+    };
+
     const menuRows = [
       {
         id: 'thong-ke-ket-qua-xo-so',
@@ -804,6 +877,7 @@ if (typeof window !== 'undefined') {
         attributes_icon: 'HomeOutlined',
         attributes_color: '#13c2c2',
         attributes_priority: 1,
+        ...businessPartnershipSeo['bat-dong-san'],
       },
       {
         id: 'lam-dep-my-pham',
@@ -819,6 +893,7 @@ if (typeof window !== 'undefined') {
         attributes_icon: 'SkinOutlined',
         attributes_color: '#eb2f96',
         attributes_priority: 2,
+        ...businessPartnershipSeo['lam-dep-my-pham'],
       },
       {
         id: 'cho-thue-xe',
@@ -834,6 +909,7 @@ if (typeof window !== 'undefined') {
         attributes_icon: 'CarOutlined',
         attributes_color: '#faad14',
         attributes_priority: 3,
+        ...businessPartnershipSeo['cho-thue-xe'],
       },
       {
         id: 'booking-online',
@@ -849,6 +925,7 @@ if (typeof window !== 'undefined') {
         attributes_icon: 'CalendarOutlined',
         attributes_color: '#faad14',
         attributes_priority: 4,
+        ...businessPartnershipSeo['booking-online'],
       },
       {
         id: 'phan-mem',
@@ -864,6 +941,7 @@ if (typeof window !== 'undefined') {
         attributes_icon: 'CodeOutlined',
         attributes_color: '#1677ff',
         attributes_priority: 5,
+        ...businessPartnershipSeo['phan-mem'],
       },
     ];
 
