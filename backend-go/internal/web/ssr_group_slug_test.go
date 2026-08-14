@@ -200,3 +200,53 @@ func TestResolveServiceListing_SingleSegmentCategoryPrefersListing(t *testing.T)
 		t.Fatalf("expected category landing content, got %q", got)
 	}
 }
+
+func TestResolveSEOForServiceRoute_CategoryPrefersServiceOverStaleDetail(t *testing.T) {
+	rm := testSSRRecordManager(t)
+	route := resolvedRoute{
+		AppID:            "wuweb",
+		TblServices:      "web_services",
+		TblServiceDetail: "web_service_detail",
+	}
+
+	if _, err := rm.CreateRecord("wuweb", "web_services", map[string]any{
+		"id":                     "kqxs-menu",
+		"slug":                   "thong-ke-ket-qua-xo-so",
+		"service_code":           "thong-ke-ket-qua-xo-so",
+		"is_service":             true,
+		"status":                 "active",
+		"domain":                 "example.com",
+		"attributes_title":       "KQXS menu mới",
+		"attributes_description": "Nội dung chuyên mục mới",
+		"attributes_keywords":    "kqxs mới",
+	}, nil); err != nil {
+		t.Fatalf("CreateRecord menu: %v", err)
+	}
+	if _, err := rm.CreateRecord("wuweb", "web_service_detail", map[string]any{
+		"id":           "kqxs-stale-detail",
+		"slug":         "thong-ke-ket-qua-xo-so",
+		"service_type": "thong-ke-ket-qua-xo-so",
+		"status":       "active",
+		"domain":       "example.com",
+		"title":        "KQXS detail cũ",
+		"content":      "Nội dung bài chi tiết cũ",
+	}, nil); err != nil {
+		t.Fatalf("CreateRecord stale detail: %v", err)
+	}
+
+	meta := resolveSEOForServiceRoute(
+		rm,
+		route,
+		"example.com",
+		"/thong-ke-ket-qua-xo-so.shtml",
+		"",
+		"",
+		"vi",
+	)
+	if meta == nil {
+		t.Fatal("expected category SEO metadata")
+	}
+	if meta.Title != "KQXS menu mới" || meta.Description != "Nội dung chuyên mục mới" {
+		t.Fatalf("expected category metadata, got title=%q description=%q", meta.Title, meta.Description)
+	}
+}

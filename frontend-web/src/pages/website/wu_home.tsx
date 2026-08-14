@@ -63,6 +63,8 @@ type ServicePost = {
   slug?: string;
   excerpt?: string;
   content?: string;
+  content_en?: string;
+  content_zh?: string;
   thumbnail?: string;
   serviceType: string;
   category?: string;
@@ -122,6 +124,14 @@ const sanitizeHomeHtml = (html?: string) => {
   } catch {
     return html;
   }
+};
+
+const getLocalizedHomeContent = (post: ServicePost | undefined, language: string): string => {
+  if (!post) return '';
+  const lang = resolveSupportedLang(language);
+  if (lang === 'en') return post.content_en || post.content || '';
+  if (lang === 'zh') return post.content_zh || post.content || '';
+  return post.content || post.content_en || post.content_zh || '';
 };
 
 export default function WuHome() {
@@ -421,6 +431,8 @@ export default function WuHome() {
             slug: p.slug || '',
             excerpt: p.excerpt || '',
             content: p.content || '',
+            content_en: p.content_en || '',
+            content_zh: p.content_zh || '',
             thumbnail: getThumbnail(p),
             serviceType: String(p.service_type || p.serviceType || 'phan-mem'),
             publishDate: p.publish_date || p.publishDate || '',
@@ -440,7 +452,7 @@ export default function WuHome() {
     // If SSR data available, use it and skip API
     if (ssrList && ssrList.length > 0) {
       const homeEntry = ssrList.find((post) => post.slug === 'home' || post.serviceType === 'home');
-      setHomeCmsContent(sanitizeHomeHtml(String(homeEntry?.content || '')));
+      setHomeCmsContent(sanitizeHomeHtml(getLocalizedHomeContent(homeEntry, i18n.language)));
 
       // Keep card sections focused on actual service posts.
       const servicePosts = ssrList.filter((post) => post.serviceType !== 'home' && post.slug !== 'home');

@@ -548,61 +548,83 @@ if (typeof window !== 'undefined') {
 
       return `
         <article>
-          <h3>Hệ Thống Thống Kê Giải Đặc Biệt Và Tra Cứu KQXS 3 Miền</h3>
-          <p>Trang này được xây để người đọc tra cứu dữ liệu xổ số theo cách rõ ràng, có cấu trúc và dễ đọc trên cả điện thoại lẫn máy tính. Thay vì dùng ngôn ngữ cổ vũ cá cược hay dự đoán, nội dung tập trung vào thống kê công khai, bộ lọc theo ngày, theo thứ, theo miền và so sánh dữ liệu giữa các đài.</p>
-          <p>Hệ thống gom nhiều lớp dữ liệu vào cùng một trang: thống kê giải đặc biệt theo tuần, theo tổng; tần suất lô tô; lô gan miền Bắc, lô gan MB, lô gan miền Nam; thống kê kết quả xổ số miền Bắc 100 ngày; và bảng so sánh theo từng đài.</p>
+          <h3>Thống Kê Kết Quả Xổ Số 3 Miền Từ Dữ Liệu 2005 Đến Nay</h3>
+          <p>Nhiều người vẫn phải tự ghi kết quả xổ số của từng đài, tự chia ngày, tự đếm tần suất rồi mới lập bảng theo cách riêng. Công việc này tốn nhiều thời gian và dễ sai khi dữ liệu kéo dài qua nhiều năm. Hệ thống CSM tự lấy kết quả xổ số hằng ngày, chuẩn hóa dữ liệu theo đài và cung cấp lịch sử từ năm 2005 đến hiện tại để người dùng tra cứu, đối chiếu và xây dựng cách thống kê của riêng mình.</p>
+          <p>Đây là công cụ thống kê và tra cứu dữ liệu công khai, không phải công cụ dự đoán, cá cược hay bảo đảm kết quả. Mọi chỉ số chỉ phản ánh dữ liệu lịch sử; kết quả quay thưởng trong tương lai là ngẫu nhiên và người dùng cần tuân thủ pháp luật Việt Nam.</p>
           <div style="background:#eff6ff;border-left:4px solid #2563eb;padding:14px;margin:16px 0;">
-            <strong>Tuyên bố pháp lý:</strong> Nội dung chỉ phục vụ mục đích thống kê dữ liệu tham khảo. Hệ thống không hỗ trợ cá cược và không khuyến khích hành vi vi phạm pháp luật Việt Nam.
+            <strong>Tuyên bố pháp lý:</strong> Nội dung và phần mềm chỉ phục vụ tra cứu, nghiên cứu và thống kê dữ liệu tham khảo. Hệ thống không hỗ trợ cá cược, không đưa ra cam kết trúng thưởng và không khuyến khích hành vi vi phạm pháp luật Việt Nam.
           </div>
-          <h4>1. Thống kê giải đặc biệt theo tuần và theo tổng</h4>
-          <p>Phần đầu tiên giúp người dùng xem giải đặc biệt theo nhiều lát cắt khác nhau. Khi gom theo tuần, bạn có thể thấy dữ liệu di chuyển như thế nào giữa các ngày trong tuần; khi gom theo tổng, bạn có thể nhìn ra cụm phân bố của hai số cuối.</p>
+          <h4>1. Người dùng tra cứu KQXS như thế nào?</h4>
+          <ol>
+            <li>Chọn khoảng <strong>Từ ngày - Đến ngày</strong>; hệ thống có thể xem dữ liệu ngắn hạn hoặc lịch sử dài từ 2005.</li>
+            <li>Chọn <strong>Miền Nam, Miền Trung hoặc Miền Bắc</strong>, sau đó chọn một hoặc nhiều đài.</li>
+            <li>Chọn thứ trong tuần, kiểu thống kê và số kỳ cần xem nếu muốn thu hẹp bảng dữ liệu.</li>
+            <li>Bấm <strong>Cập nhật kết quả</strong> để xem bảng kết quả; chuyển sang các tab thống kê để phân tích theo nhu cầu.</li>
+            <li>Dùng <strong>Xuất Excel</strong> hoặc <strong>Chụp bảng</strong> để lưu báo cáo và đối chiếu sau này.</li>
+          </ol>
+          <h4>2. Các tính năng thống kê kết quả xổ số đang có</h4>
           <ul>
-            <li><strong>Thống kê giải đặc biệt theo tuần:</strong> Theo dõi phân bố dãy số theo chu kỳ ngày trong tuần để có góc nhìn dài hơn.</li>
-            <li><strong>Thống kê giải đặc biệt theo tổng:</strong> Nhóm dữ liệu theo tổng hai số cuối để quan sát cụm phân bổ rõ hơn.</li>
-            <li><strong>Thống kê miền Bắc:</strong> Tổng hợp dữ liệu theo từng đài, hỗ trợ so sánh theo nhiều khoảng thời gian.</li>
+            <li><strong>Thống kê giải đặc biệt:</strong> Xem theo tuần, theo tổng, theo ngày, theo kỳ và theo thứ trong tuần.</li>
+            <li><strong>Thống kê lô và tần suất lô tô:</strong> Đếm số lần xuất hiện, tổng số, kỳ không xuất hiện và lịch sử khoảng cách.</li>
+            <li><strong>Lô gan miền Bắc, lô gan MB và lô gan miền Nam:</strong> Xem khoảng thời gian chưa xuất hiện trong dữ liệu đã có, chỉ nhằm phục vụ phân tích lịch sử.</li>
+            <li><strong>Thống kê kết quả xổ số miền Bắc 100 ngày:</strong> Đọc nhanh dữ liệu 100 ngày và so sánh với các giai đoạn dài hơn.</li>
+            <li><strong>XSMB theo tuần và thống kê xổ số miền Bắc:</strong> Theo dõi theo tuần, theo đài, theo đầu - đuôi và theo nhóm dữ liệu.</li>
+            <li><strong>Tra cứu kết quả theo hàng chục, đơn vị và tổ hợp:</strong> Giúp người dùng kiểm tra lại bảng số theo cấu trúc riêng.</li>
           </ul>
-          <h4>2. Thống kê lô, tần suất lô tô và lô gan</h4>
-          <p>Phần thứ hai tập trung vào bảng số 00-99, cách các cặp số xuất hiện theo thời gian và khoảng trễ giữa các lần xuất hiện. Người đọc thường dùng phần này để xem lại tần suất lô tô, lô gan miền Bắc hoặc lô gan miền Nam dưới góc nhìn dữ liệu.</p>
-          <p>Nếu một số xuất hiện dày, người dùng có thể nhìn thấy ngay trong bảng thống kê; nếu một số ít xuất hiện hơn, hệ thống sẽ thể hiện khoảng trễ để dễ đối chiếu với lịch sử.</p>
-          <h4>3. Thống kê kết quả xổ số miền Bắc 100 ngày</h4>
-          <p>Phần thứ ba mở rộng cửa sổ dữ liệu sang 100 ngày gần nhất để người đọc so sánh theo giai đoạn. Đây là kiểu xem dữ liệu phù hợp với nhu cầu quan sát thay đổi trong dài hạn.</p>
+          <h4>3. Nhóm công cụ phân tích nâng cao KQXS</h4>
+          <p>Trong khu vực thống kê nâng cao, người dùng có thể mở các nhóm công cụ sau:</p>
+          <ul>
+            <li><strong>Kiểm tra tổng hợp (KTT):</strong> xem dữ liệu đài chính, đài phụ, các đài miền Nam và đài miền Bắc theo ngày; hỗ trợ đối chiếu số chính, số đảo và các trường đầu - đuôi.</li>
+            <li><strong>Số lâu ra Nam - Bắc (SLR):</strong> xem bảng theo tuần, ngày trong tuần, khoảng chưa xuất hiện, số chính, số đảo và vị trí xuất hiện đầu tiên.</li>
+            <li><strong>Thống kê Nam - Bắc (NB):</strong> tổng hợp đầu, đuôi, bao lô, nhóm hai đài, ba đài và các nhóm Nam - Bắc để so sánh dữ liệu.</li>
+            <li><strong>Tổng hợp:</strong> chọn hệ 2 hoặc hệ 3, chọn loại tìm, nhóm số, nhóm Triệt và các chỉ số như ngày/kỳ chưa xuất hiện, tổng tuần, tổng ngày, KTD, KTN, L2C, TKY và TND.</li>
+            <li><strong>Tự động theo loại tìm x nhóm số:</strong> tải nhóm từ API, chọn nhiều loại tìm, mở rộng nhóm, chọn toàn nhóm, chạy tự động, theo dõi tiến trình và dừng khi cần.</li>
+            <li><strong>Bộ lọc tự động:</strong> hỗ trợ các điều kiện C1-C9 như top số có khoảng cách lớn, ngày/kỳ chưa xuất hiện, tổng tuần, tổng ngày và các bộ lọc do người dùng nhập.</li>
+            <li><strong>Bóng và bảng kết hợp:</strong> hỗ trợ nhiều cách hiển thị dữ liệu đầu - đuôi để người dùng đọc và kiểm tra theo quy tắc riêng, không phải khuyến nghị đặt cược.</li>
+          </ul>
+          <h4>4. Tự viết cách thống kê theo yêu cầu</h4>
+          <p>Không phải ai cũng cần cùng một công thức. Người dùng có thể yêu cầu viết riêng một tool thống kê KQXS theo đài, miền, khoảng ngày, loại giải, hệ số, nhóm số, điều kiện lọc, cách tính và mẫu báo cáo của mình. CSM có thể khảo sát cách bạn đang ghi chép thủ công, chuyển thành quy tắc rõ ràng, kết nối dữ liệu lịch sử và tạo bảng kết quả phù hợp.</p>
+          <p>Quy trình đề xuất gồm: mô tả cách tính hiện tại, gửi một vài ví dụ đầu vào - đầu ra, thống nhất phạm vi dữ liệu, chạy thử với dữ liệu cũ, kiểm tra đối chiếu và bàn giao công cụ. Các yêu cầu khó như nhiều đài, nhiều mốc thời gian, nhóm tùy chỉnh hoặc xuất Excel đều có thể được tách thành từng bước để dễ kiểm tra.</p>
+          <h4>5. Tự động hóa dữ liệu và nội dung cho doanh nghiệp</h4>
+          <p>Ngoài hệ thống thống kê kết quả xổ số, CSM chuyên viết các tool tự động hóa theo quy trình thực tế:</p>
+          <ul>
+            <li>Tự động lấy và chuẩn hóa dữ liệu từ website theo lịch chạy.</li>
+            <li>Tự động tạo báo cáo, lưu lịch sử, xuất Excel và gửi dữ liệu đến nơi cần dùng.</li>
+            <li>Hệ thống hỗ trợ tự động đăng bài lên mạng xã hội theo nội dung đã duyệt và lịch nội dung.</li>
+            <li>Tự động quét nội dung tin nhắn Zalo để phân loại, tìm thông tin và đưa vào quy trình xử lý phù hợp, có kiểm soát quyền truy cập.</li>
+            <li>Kết nối nhiều nguồn dữ liệu và xây công cụ riêng thay cho việc nhập liệu lặp đi lặp lại.</li>
+          </ul>
+          <h4>6. Vì sao nên dùng hệ thống thay cho ghi chép thủ công?</h4>
+          <p>Ghi kết quả từng ngày rồi tự tính toán khiến người dùng mất nhiều thời gian, khó mở rộng từ một đài sang nhiều đài và dễ bỏ sót dữ liệu. Hệ thống giúp tự động lấy dữ liệu hằng ngày, giữ lịch sử từ 2005 đến hiện tại, lọc theo đúng khoảng cần xem và tái sử dụng cùng một quy trình khi cần cập nhật. Người dùng có thêm thời gian cho công việc khác nhưng vẫn giữ được cách thống kê riêng.</p>
           <table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;width:100%;">
             <thead>
               <tr>
-                <th>Chỉ số</th>
-                <th>Khoảng dữ liệu</th>
-                <th>Cách xử lý</th>
-                <th>Giá trị tham khảo</th>
+                <th>Nhu cầu</th>
+                <th>Tính năng phù hợp</th>
+                <th>Kết quả nhận được</th>
               </tr>
             </thead>
             <tbody>
               <tr>
-                <td>Tần suất xuất hiện</td>
-                <td>30 - 100 kỳ quay</td>
-                <td>Đếm số lần và chuẩn hóa</td>
-                <td>Đánh giá độ ổn định của dãy số</td>
+                <td>Xem dữ liệu nhanh</td>
+                <td>Tra cứu KQXS theo ngày, đài và miền</td>
+                <td>Bảng kết quả dễ đối chiếu</td>
               </tr>
               <tr>
-                <td>Giải đặc biệt đa chiều</td>
-                <td>Theo tuần, theo tổng</td>
-                <td>Phân nhóm chuỗi số cuối</td>
-                <td>Trực quan hóa xu hướng</td>
+                <td>Đếm và so sánh</td>
+                <td>Tần suất lô tô, lô gan, giải đặc biệt</td>
+                <td>Chỉ số lịch sử theo khoảng thời gian</td>
               </tr>
               <tr>
-                <td>Khoảng trễ phân bố</td>
-                <td>Tối đa 500 kỳ gần nhất</td>
-                <td>Đo độ lệch xác suất</td>
-                <td>Theo dõi nhóm số ít xuất hiện</td>
+                <td>Thống kê riêng</td>
+                <td>Tool viết theo yêu cầu và nhóm tùy chỉnh</td>
+                <td>Quy trình phù hợp cách tính của bạn</td>
               </tr>
             </tbody>
           </table>
-          <h4>4. Bộ lọc theo ngày, theo thứ và theo đài</h4>
-          <p>Người dùng có thể lọc theo khoảng ngày, theo thứ trong tuần, theo miền và theo đài cụ thể. Đây là điểm quan trọng để chuyển từ một bảng dữ liệu lớn sang một lát cắt nhỏ, đúng nhu cầu tìm kiếm.</p>
-          <h4>5. Xuất Excel, chụp bảng và lưu dữ liệu</h4>
-          <p>Hệ thống hỗ trợ xuất Excel, chụp bảng và lưu lại kết quả để xem sau. Điều này hữu ích cho những ai muốn ghi chú cá nhân hoặc đối chiếu nhiều giai đoạn thống kê cùng lúc.</p>
-          <h4>6. Kết luận và lưu ý sử dụng</h4>
-          <p>Toàn bộ nội dung được xây dựng theo hướng minh bạch, hợp pháp và thiên về dữ liệu công khai. Nếu bạn cần một trang KQXS chuẩn SEO, có đầy đủ khung nội dung, có bộ lọc rõ ràng và có tính năng thao tác trực tiếp, cấu trúc này sẽ phù hợp.</p>
-          <p><em>Bạn có thể dùng trang này như một bảng tra cứu dữ liệu thống kê, không phải như nội dung khuyến khích cờ bạc. Mục tiêu là thông tin, so sánh và lưu trữ dữ liệu một cách có trách nhiệm.</em></p>
+          <h4>7. Liên hệ viết tool thống kê KQXS</h4>
+          <p>Nếu bạn đang có một file Excel, sổ ghi chép hoặc công thức thống kê riêng, hãy gửi yêu cầu để được tư vấn cách số hóa. Liên hệ <strong>Lê Anh CSM - 0388.610.885</strong> để trao đổi về tool thống kê KQXS, tự động lấy dữ liệu web, tự động đăng bài mạng xã hội hoặc tự động quét nội dung tin nhắn Zalo.</p>
+          <p><em>Mục tiêu của hệ thống là tiết kiệm thời gian nhập liệu, nâng cao khả năng tra cứu và giúp người dùng làm việc với dữ liệu minh bạch, có trách nhiệm. Không sử dụng các thống kê này như lời khuyên tài chính, lời khẳng định kết quả hoặc lời mời tham gia cá cược.</em></p>
         </article>
       `;
     };
@@ -734,13 +756,13 @@ if (typeof window !== 'undefined') {
         attributes_icon: 'DatabaseOutlined',
         attributes_color: '#13c2c2',
         attributes_priority: 1,
-        attributes_title: 'Hệ thống thống kê giải đặc biệt và dữ liệu kết quả xổ số 3 miền',
+        attributes_title: 'Thống kê kết quả xổ số 3 miền từ 2005 và viết tool theo yêu cầu',
         attributes_title_en: 'Special Prize Statistics and 3-Region Lottery Data Platform',
         attributes_title_zh: '三地区特别奖统计与彩票数据平台',
-        attributes_description: 'Tra cứu thống kê giải đặc biệt theo tuần, theo tổng, tần suất lô tô và thống kê kết quả xổ số miền bắc 100 ngày.',
+        attributes_description: 'Tra cứu KQXS từ 2005: giải đặc biệt, thống kê lô, tần suất lô tô, lô gan, XSMB theo tuần và 100 ngày; nhận viết tool riêng.',
         attributes_description_en: 'Look up special-prize weekly and sum-based analytics, loto frequency and 100-day Northern lottery statistics.',
         attributes_description_zh: '提供特别奖周统计、总值统计、号码频率及北部100天彩票数据查询。',
-        attributes_keywords: 'thống kê giải đặc biệt, thống kê giải đặc biệt theo tuần, thống kê giải đặc biệt theo tổng, tần suất lô tô, lô gan miền bắc, lô gan mb, lô gan miền nam, thống kê kết quả xổ số miền bắc 100 ngày, xsmb theo tuần, thống kê xổ số miền bắc',
+        attributes_keywords: 'thống kê giải đặc biệt, thống kê giải đặc biệt theo tuần, thống kê giải đặc biệt theo tổng, thống kê lô, tần suất lô tô, lô gan miền bắc, lô gan mb, lô gan miền nam, thống kê kết quả xổ số miền bắc 100 ngày, xsmb theo tuần, thống kê xổ số miền bắc, viết tool thống kê KQXS',
         attributes_keywords_en: 'special prize statistics, weekly special prize analytics, loto frequency, northern lottery 100-day statistics',
         attributes_keywords_zh: '特别奖统计, 周统计, 号码频率, 北部彩票100天统计',
         content: defaultKqxsLandingContent,
@@ -849,22 +871,22 @@ if (typeof window !== 'undefined') {
       slug: 'thong-ke-ket-qua-xo-so',
       service_code: 'thong-ke-ket-qua-xo-so',
       service_type: 'thong-ke-ket-qua-xo-so',
-      title: 'Hệ Thống Thống Kê Giải Đặc Biệt Và Phân Tích Dữ Liệu Kết Quả Xổ Số 3 Miền',
+      title: 'Thống Kê Kết Quả Xổ Số 3 Miền Từ 2005 Và Tool Theo Yêu Cầu',
       title_en: 'Special Prize Statistics and 3-Region Lottery Data Analysis System',
       title_zh: '三地区特别奖统计与彩票数据分析系统',
-      excerpt: 'Tra cứu thống kê giải đặc biệt theo tuần, theo tổng, tần suất lô tô và dữ liệu thống kê kết quả xổ số miền bắc 100 ngày.',
+      excerpt: 'Tra cứu KQXS từ 2005: thống kê giải đặc biệt theo tuần/theo tổng, thống kê lô, tần suất lô tô, lô gan, XSMB theo tuần và 100 ngày.',
       excerpt_en: 'Track weekly and sum-based special prize analytics, loto frequency and 100-day northern lottery data.',
       excerpt_zh: '查询特别奖周统计、总值统计、号码频率与北部100天彩票数据。',
       content: defaultKqxsLandingContent,
       content_en: String(options.kqxsContentEn || defaultKqxsSeoContentEn),
       content_zh: String(options.kqxsContentZh || defaultKqxsSeoContentZh),
-      attributes_title: 'Hệ thống thống kê giải đặc biệt và dữ liệu kết quả xổ số 3 miền',
+      attributes_title: 'Thống kê kết quả xổ số 3 miền từ 2005 và tool theo yêu cầu',
       attributes_title_en: 'Special Prize Statistics and 3-Region Lottery Data Platform',
       attributes_title_zh: '三地区特别奖统计与彩票数据平台',
-      attributes_description: 'Nền tảng thống kê xổ số kiến thiết theo hướng dữ liệu minh bạch: thống kê lô, tần suất lô tô, xsmb theo tuần và chu kỳ 100 ngày.',
+      attributes_description: 'Nền tảng dữ liệu minh bạch: thống kê giải đặc biệt, thống kê lô, tần suất lô tô, lô gan, XSMB theo tuần, 100 ngày và tool riêng.',
       attributes_description_en: 'A transparent data-first lottery statistics platform: loto analytics, frequency tracking, weekly North-region views and 100-day windows.',
       attributes_description_zh: '基于透明数据的彩票统计平台：号码统计、频率追踪、北部周视图与100天窗口。',
-      attributes_keywords: 'thống kê giải đặc biệt, thống kê giải đặc biệt theo tuần, thống kê giải đặc biệt theo tổng, thống kê lô, tần suất lô tô, lô gan miền bắc, lô gan mb, lô gan miền nam, thống kê kết quả xổ số miền bắc 100 ngày, xsmb theo tuần, thống kê xổ số miền bắc, thống kê miền bắc',
+      attributes_keywords: 'thống kê giải đặc biệt, thống kê giải đặc biệt theo tuần, thống kê giải đặc biệt theo tổng, thống kê lô, tần suất lô tô, lô gan miền bắc, lô gan mb, lô gan miền nam, thống kê kết quả xổ số miền bắc 100 ngày, xsmb theo tuần, thống kê xổ số miền bắc, viết tool thống kê KQXS',
       attributes_keywords_en: 'special prize statistics, weekly xsmb stats, loto frequency analytics, 100-day lottery data',
       attributes_keywords_zh: '特别奖统计, 周期统计, 号码频率, 北部100天数据',
       tags: JSON.stringify(['thong-ke-giai-dac-biet-du-lieu-kqxs', 'thong-ke-xo-so', 'giai-dac-biet', 'xsmb-100-ngay', 'du-lieu-3-mien']),
@@ -960,19 +982,101 @@ if (typeof window !== 'undefined') {
 
     const defaultHomepageSeoContent = `
       <article>
-        <h1>Trang Chủ Thống Kê Dữ Liệu Kết Quả Xổ Số 3 Miền</h1>
-        <p>Trang chủ tổng hợp các công cụ thống kê giải đặc biệt, thống kê lô, tần suất lô tô và dữ liệu kết quả xổ số miền bắc 100 ngày.</p>
+        <h1>Lê Anh CSM - Growth Marketing, Technical SEO và AI Automation</h1>
+        <p><strong>Lê Đức Anh</strong>, thương hiệu cá nhân <strong>Lê Anh CSM</strong>, là chuyên gia Head of MarTech &amp; Growth Marketing Director với hơn 20 năm kinh nghiệm kết hợp giữa tăng trưởng marketing, Technical SEO, kiến trúc công nghệ và AI Automation.</p>
+        <p>Từ tư vấn chiến lược đến triển khai hệ thống, tôi tập trung giải quyết các bài toán thực tế: tăng traffic tự nhiên, tối ưu chuyển đổi, tự động hóa marketing, xây dựng phần mềm theo quy trình riêng, kết nối dữ liệu và tạo dashboard giúp doanh nghiệp theo dõi KPI/ROI rõ ràng hơn.</p>
         <div style="background:#eff6ff;border-left:4px solid #2563eb;padding:14px;margin:16px 0;">
-          <strong>Tuyên bố pháp lý:</strong> Nội dung chỉ phục vụ mục đích thống kê dữ liệu tham khảo, không hỗ trợ cá cược và không khuyến khích hành vi vi phạm pháp luật Việt Nam.
+          <strong>Thông tin liên hệ:</strong> Lê Anh CSM | Điện thoại: <a href="tel:0388610885">0388.610.885</a> | Email: <a href="mailto:lleducanh@gmail.com">lleducanh@gmail.com</a> | Bình Thạnh, TP.HCM.
         </div>
-        <h2>Danh mục nổi bật</h2>
+        <h2>Tóm lược năng lực chiến lược</h2>
+        <p>Tôi từng dẫn dắt các chiến dịch đưa website và ứng dụng lên Top 1 Google Search, xây dựng hệ thống thu thập lead tự động và tối ưu phễu AARRR cho các thương hiệu như Fidovn, Nguyễn Kim và Báo chí Nam Hương. Thế mạnh là kết hợp marketing với công nghệ để giảm chi phí vận hành, tăng năng suất nội dung và tạo nền tảng tăng trưởng có thể đo lường.</p>
+        <h2>Dịch vụ tôi có thể triển khai</h2>
         <ul>
-          <li>Thống kê giải đặc biệt theo tuần và theo tổng.</li>
-          <li>Thống kê kết quả xổ số miền bắc 100 ngày.</li>
-          <li>Phân tích tần suất lô tô và khoảng trễ dữ liệu.</li>
+          <li><strong>Growth Marketing &amp; Performance:</strong> hoạch định chiến lược tăng trưởng theo AARRR, tối ưu CRO, CAC, LTV, Performance Marketing và Analytics.</li>
+          <li><strong>Technical SEO &amp; SEO Automation:</strong> tối ưu hạ tầng web/app, kiến trúc dữ liệu, technical audit, topic cluster và quy trình SEO có thể mở rộng.</li>
+          <li><strong>AI Content Engine:</strong> tích hợp Gemini, OpenAI, Claude hoặc AI Local để hỗ trợ sản xuất nội dung chuẩn SEO, có quy trình kiểm duyệt trước khi xuất bản.</li>
+          <li><strong>Marketing Automation:</strong> tự động hóa thu thập, phân loại và chăm sóc lead; xây luồng đăng nội dung đa kênh cho website và fanpage theo quyền được cấp.</li>
+          <li><strong>Tool theo yêu cầu:</strong> khảo sát quy trình thủ công, chuyển công thức Excel hoặc cách làm riêng thành web-app, mobile-app, desktop-app, dashboard hoặc API.</li>
+          <li><strong>Tự động lấy và đồng bộ dữ liệu:</strong> kết nối dữ liệu website, CRM, mạng xã hội và các hệ thống nội bộ; lập lịch chạy, lưu lịch sử, xuất báo cáo và cảnh báo.</li>
+          <li><strong>Lead Scraping có kiểm soát:</strong> xây quy trình xử lý dữ liệu từ web hoặc Zalo theo phạm vi được phép, tôn trọng quyền riêng tư, điều khoản nền tảng và quy định pháp luật.</li>
+          <li><strong>Data Pipeline &amp; Infrastructure:</strong> thiết kế pipeline với RocksDB, MongoDB, MySQL, quản trị Cloud Alibaba Cloud ECS/OSS và tối ưu chi phí hạ tầng.</li>
+          <li><strong>Dashboard KPI/ROI:</strong> trực quan hóa dữ liệu marketing và vận hành để ban lãnh đạo theo dõi chỉ số theo thời gian thực hoặc theo chu kỳ.</li>
         </ul>
-        <h2>Mục tiêu của hệ thống</h2>
-        <p>Cung cấp dữ liệu minh bạch, dễ tra cứu trên điện thoại và máy tính, phục vụ nghiên cứu và tham khảo thông tin công khai.</p>
+        <h2>Kinh nghiệm làm việc tiêu biểu</h2>
+        <h3>Fidovn | Trưởng phòng MarTech &amp; Growth Marketing Lead | 2024 - 2026</h3>
+        <p>Đưa nền tảng Fidovn.com và mobile app lên Top 1 Google Search, phát triển Google Click Automation, tự động hóa quy trình tăng trưởng traffic, xây hệ thống quét và phân loại dữ liệu người dùng từ Zalo và các nền tảng tuyển dụng, đồng thời triển khai AI Content Generation Engine giúp tăng 300% năng suất sáng tạo nội dung marketing.</p>
+        <h3>Công ty TNHH Phần mềm LAP | Technical Product &amp; Digital Solutions Director | 2014 - 2024</h3>
+        <p>Tư vấn và phát triển giải pháp chuyển đổi số, MarTech và hệ thống quản trị phần mềm cho nhiều doanh nghiệp đa ngành; triển khai Web-App, Mobile-App, Desktop-App, CRM, tự động hóa chăm sóc khách hàng và phân tích dữ liệu thị trường.</p>
+        <h3>Công ty CP Truyền thông &amp; Đầu tư Nam Hương | Trưởng phòng IT &amp; Cố vấn Digital Marketing Tổng Giám đốc | 2010 - 2012</h3>
+        <p>Cố vấn chuyển đổi số từ báo giấy sang báo điện tử kết hợp thương mại điện tử cho 5 tựa tạp chí lớn; phát triển, nâng cấp và vận hành nền tảng website điện tử trên ASP.NET, C# và SQL.</p>
+        <h3>Đa Kết Nối &amp; Nguyễn Kim Ecommerce | Project Manager / Ecommerce Developer | 2007 - 2010</h3>
+        <p>Tham gia phát triển website thương mại điện tử Nguyễn Kim và các hệ thống quản trị nội bộ; quản lý dự án CRM, quản lý doanh thu và đặt vé online cho các đối tác trong lĩnh vực bán lẻ, khách sạn và vận tải.</p>
+        <h2>Nền tảng chuyên môn</h2>
+        <p>Cử nhân Cao đẳng Công nghệ Phần mềm, Trường Đại học Công nghiệp TP.HCM (2003 - 2006). Có nền tảng kế toán doanh nghiệp để quản trị P&amp;L và ROI marketing; tiếng Trung HSK3, tiếng Anh trình độ B để đọc hiểu tài liệu chuyên ngành MarTech.</p>
+        <h2>Cách bắt đầu một dự án</h2>
+        <ol>
+          <li>Gửi bài toán, quy trình hiện tại, dữ liệu mẫu và mục tiêu cần đạt.</li>
+          <li>Cùng xác định phạm vi, nguồn dữ liệu, quyền truy cập, chỉ số đo lường và yêu cầu bảo mật.</li>
+          <li>Thiết kế bản thử nghiệm nhỏ để kiểm tra logic, chất lượng dữ liệu và trải nghiệm sử dụng.</li>
+          <li>Mở rộng thành hệ thống hoàn chỉnh, có tài liệu, nhật ký vận hành và hướng dẫn bàn giao.</li>
+        </ol>
+        <h2>Liên hệ Lê Anh CSM</h2>
+        <p>Bạn có thể liên hệ để trao đổi về Technical SEO, Growth Marketing, AI Local, tự động hóa marketing, tool lấy dữ liệu web, tool thống kê theo yêu cầu, tự động đăng nội dung mạng xã hội, xử lý dữ liệu Zalo hợp pháp hoặc dashboard quản trị.</p>
+        <p><strong>Điện thoại:</strong> <a href="tel:0388610885">0388.610.885</a><br><strong>Email:</strong> <a href="mailto:lleducanh@gmail.com">lleducanh@gmail.com</a><br><strong>Địa điểm:</strong> Quận Bình Thạnh, TP.HCM<br><strong>Thương hiệu:</strong> Lê Anh CSM</p>
+      </article>
+    `;
+
+    const defaultHomepageSeoContentEn = `
+      <article>
+        <h1>Le Anh CSM - Growth Marketing, Technical SEO and AI Automation</h1>
+        <p><strong>Le Duc Anh</strong>, known through the personal brand <strong>Le Anh CSM</strong>, is a Head of MarTech &amp; Growth Marketing Director with more than 20 years of experience combining growth marketing, Technical SEO, technology architecture and AI automation.</p>
+        <p>From strategy to implementation, I help solve practical business problems: organic traffic growth, conversion optimization, marketing automation, custom workflow tools, data integration and KPI/ROI dashboards.</p>
+        <div style="background:#eff6ff;border-left:4px solid #2563eb;padding:14px;margin:16px 0;"><strong>Contact:</strong> Le Anh CSM | Phone: <a href="tel:0388610885">0388.610.885</a> | Email: <a href="mailto:lleducanh@gmail.com">lleducanh@gmail.com</a> | Binh Thanh District, Ho Chi Minh City.</div>
+        <h2>Core services</h2>
+        <ul>
+          <li>Growth Marketing, AARRR strategy, CRO, CAC, LTV, performance marketing and analytics.</li>
+          <li>Technical SEO, web/app infrastructure optimization, data architecture and SEO automation.</li>
+          <li>AI Content Engine using Gemini, OpenAI, Claude or private AI Local workflows with human review.</li>
+          <li>Marketing automation, lead collection and multi-channel publishing for authorized websites and fanpages.</li>
+          <li>Custom tools that turn Excel processes and manual methods into web, mobile, desktop, dashboard or API solutions.</li>
+          <li>Data pipelines, website synchronization, RocksDB, MongoDB, MySQL and Alibaba Cloud ECS/OSS infrastructure.</li>
+          <li>Controlled web or Zalo data workflows that respect privacy, platform terms and applicable law.</li>
+        </ul>
+        <h2>Selected experience</h2>
+        <p>At Fidovn (2024 - 2026), I led MarTech and growth initiatives that brought Fidovn.com and its mobile app to Google Search Top 1, automated traffic growth and increased content production productivity by 300%.</p>
+        <p>At LAP Software (2014 - 2024), I directed digital solutions and advised businesses on Web-App, Mobile-App, Desktop-App, CRM and automation projects.</p>
+        <p>At Nam Huong Media (2010 - 2012), I advised digital transformation from print publications to electronic publishing and e-commerce. Earlier, I worked on Nguyen Kim e-commerce and CRM, revenue management and online booking systems.</p>
+        <h2>Start a project</h2>
+        <p>Send the business problem, current workflow, sample data and desired outcome. We can define scope, access permissions, security, metrics and a small pilot before expanding into a maintainable system with documentation.</p>
+        <h2>Contact Le Anh CSM</h2>
+        <p><strong>Phone:</strong> <a href="tel:0388610885">0388.610.885</a><br><strong>Email:</strong> <a href="mailto:lleducanh@gmail.com">lleducanh@gmail.com</a><br><strong>Location:</strong> Binh Thanh District, Ho Chi Minh City<br><strong>Brand:</strong> Le Anh CSM</p>
+      </article>
+    `;
+
+    const defaultHomepageSeoContentZh = `
+      <article>
+        <h1>Le Anh CSM - 增长营销、技术 SEO 与 AI 自动化</h1>
+        <p><strong>Le Duc Anh</strong> 使用个人品牌 <strong>Le Anh CSM</strong>，拥有超过 20 年经验，专注于增长营销、技术 SEO、技术架构和 AI 自动化。</p>
+        <p>我从战略咨询到系统落地，帮助企业解决自然流量增长、转化率优化、营销自动化、定制工具、数据整合以及 KPI/ROI 看板等实际问题。</p>
+        <div style="background:#eff6ff;border-left:4px solid #2563eb;padding:14px;margin:16px 0;"><strong>联系方式：</strong> Le Anh CSM | 电话：<a href="tel:0388610885">0388.610.885</a> | 邮箱：<a href="mailto:lleducanh@gmail.com">lleducanh@gmail.com</a> | 越南胡志明市平盛郡。</div>
+        <h2>可提供的服务</h2>
+        <ul>
+          <li>增长营销、AARRR 策略、CRO、CAC、LTV、效果营销与数据分析。</li>
+          <li>技术 SEO、网站和应用基础设施优化、数据架构与 SEO 自动化。</li>
+          <li>使用 Gemini、OpenAI、Claude 或企业内部 AI Local 的 AI 内容生产流程，并保留人工审核。</li>
+          <li>营销自动化、授权网站和粉丝页的线索收集以及多渠道内容发布。</li>
+          <li>把 Excel 流程和人工方法转化为 Web、移动端、桌面端、数据看板或 API 工具。</li>
+          <li>数据管道、网站同步、RocksDB、MongoDB、MySQL 以及 Alibaba Cloud ECS/OSS 基础设施。</li>
+          <li>在遵守隐私、平台条款和适用法律的前提下，设计网站或 Zalo 数据处理流程。</li>
+        </ul>
+        <h2>工作经验</h2>
+        <p>在 Fidovn（2024 - 2026），负责 MarTech 与增长工作，使 Fidovn.com 和移动应用进入 Google Search Top 1，自动化流量增长流程，并将内容生产效率提升 300%。</p>
+        <p>在 LAP Software（2014 - 2024），负责数字解决方案，为多行业企业提供 Web-App、Mobile-App、Desktop-App、CRM 和自动化系统咨询。</p>
+        <p>在 Nam Huong Media（2010 - 2012），参与从纸质出版物向电子报刊和电子商务的数字化转型。更早期间参与 Nguyễn Kim 电商网站、CRM、收入管理和在线预订系统。</p>
+        <h2>项目开始方式</h2>
+        <p>请提供业务问题、现有流程、样例数据和目标结果。我们会先确认范围、访问权限、安全要求和衡量指标，再通过小型试点验证后扩展为有文档、可维护的系统。</p>
+        <h2>联系 Le Anh CSM</h2>
+        <p><strong>电话：</strong><a href="tel:0388610885">0388.610.885</a><br><strong>邮箱：</strong><a href="mailto:lleducanh@gmail.com">lleducanh@gmail.com</a><br><strong>地点：</strong>越南胡志明市平盛郡<br><strong>品牌：</strong>Le Anh CSM</p>
       </article>
     `;
 
@@ -980,25 +1084,25 @@ if (typeof window !== 'undefined') {
       slug: 'home',
       service_code: 'home',
       service_type: 'home',
-      title: String(options.homepageTitle || 'Trang Chủ Thống Kê Dữ Liệu Kết Quả Xổ Số 3 Miền'),
-      title_en: String(options.homepageTitleEn || 'CSM Bridge Home'),
-      title_zh: String(options.homepageTitleZh || 'CSM Bridge 首页'),
-      excerpt: String(options.homepageExcerpt || 'Trang chủ tổng hợp thống kê giải đặc biệt, thống kê lô, tần suất lô tô và dữ liệu kết quả xổ số 3 miền.'),
-      excerpt_en: String(options.homepageExcerptEn || 'Homepage content is generated from PDF materials.'),
-      excerpt_zh: String(options.homepageExcerptZh || '首页内容由 PDF 资料生成。'),
+      title: String(options.homepageTitle || 'Lê Anh CSM - Growth Marketing, Technical SEO và AI Automation'),
+      title_en: String(options.homepageTitleEn || 'Le Anh CSM - Growth Marketing, Technical SEO and AI Automation'),
+      title_zh: String(options.homepageTitleZh || 'Le Anh CSM - 增长营销、技术 SEO 与 AI 自动化'),
+      excerpt: String(options.homepageExcerpt || 'Lê Anh CSM cung cấp Growth Marketing, Technical SEO, AI Automation, tool theo yêu cầu, Data Pipeline và dashboard KPI/ROI.'),
+      excerpt_en: String(options.homepageExcerptEn || 'Le Anh CSM provides growth marketing, Technical SEO, AI automation, custom tools, data pipelines and KPI/ROI dashboards.'),
+      excerpt_zh: String(options.homepageExcerptZh || 'Le Anh CSM 提供增长营销、技术 SEO、AI 自动化、定制工具、数据管道和 KPI/ROI 看板服务。'),
       content: homepageContent || defaultHomepageSeoContent,
-      content_en: String(options.homepageContentEn || ''),
-      content_zh: String(options.homepageContentZh || ''),
-      attributes_title: String(options.homepageSeoTitle || 'Trang chủ thống kê dữ liệu kết quả xổ số 3 miền'),
-      attributes_title_en: String(options.homepageSeoTitleEn || 'CSM Bridge Home'),
-      attributes_title_zh: String(options.homepageSeoTitleZh || 'CSM Bridge 首页'),
-      attributes_description: String(options.homepageSeoDescription || 'Tra cứu nhanh thống kê giải đặc biệt, thống kê miền bắc, tần suất lô tô và dữ liệu xổ số 3 miền theo chu kỳ.'),
-      attributes_description_en: String(options.homepageSeoDescriptionEn || 'Homepage aggregating service information and data from PDF sources.'),
-      attributes_description_zh: String(options.homepageSeoDescriptionZh || '汇总服务信息与 PDF 数据来源的首页。'),
-      attributes_keywords: String(options.homepageSeoKeywords || 'trang chủ thống kê xổ số, thống kê giải đặc biệt, thống kê kết quả xổ số miền bắc 100 ngày, tần suất lô tô, thống kê miền bắc'),
-      attributes_keywords_en: String(options.homepageSeoKeywordsEn || 'homepage, software, partnership, lottery statistics'),
-      attributes_keywords_zh: String(options.homepageSeoKeywordsZh || '首页, 软件, 合作, 彩票统计'),
-      tags: JSON.stringify(['homepage', 'pdf', 'landing']),
+      content_en: String(options.homepageContentEn || defaultHomepageSeoContentEn),
+      content_zh: String(options.homepageContentZh || defaultHomepageSeoContentZh),
+      attributes_title: String(options.homepageSeoTitle || 'Lê Anh CSM - Growth Marketing, Technical SEO và AI Automation'),
+      attributes_title_en: String(options.homepageSeoTitleEn || 'Le Anh CSM - Growth Marketing, Technical SEO and AI Automation'),
+      attributes_title_zh: String(options.homepageSeoTitleZh || 'Le Anh CSM - 增长营销、技术 SEO 与 AI 自动化'),
+      attributes_description: String(options.homepageSeoDescription || 'Growth Marketing, Technical SEO, AI Automation, tool theo yêu cầu, Data Pipeline và dashboard KPI/ROI cùng Lê Anh CSM.'),
+      attributes_description_en: String(options.homepageSeoDescriptionEn || 'Growth marketing, Technical SEO, AI automation, custom tools, data pipelines and KPI/ROI dashboards by Le Anh CSM.'),
+      attributes_description_zh: String(options.homepageSeoDescriptionZh || 'Le Anh CSM 提供增长营销、技术 SEO、AI 自动化、定制工具、数据管道和 KPI/ROI 看板。'),
+      attributes_keywords: String(options.homepageSeoKeywords || 'Lê Anh CSM, Growth Marketing, Technical SEO, AI Automation, MarTech, SEO Automation, tool theo yêu cầu, Data Pipeline, dashboard KPI ROI'),
+      attributes_keywords_en: String(options.homepageSeoKeywordsEn || 'Le Anh CSM, growth marketing, Technical SEO, AI automation, MarTech, custom tools, data pipelines, KPI ROI dashboard'),
+      attributes_keywords_zh: String(options.homepageSeoKeywordsZh || 'Le Anh CSM, 增长营销, 技术 SEO, AI 自动化, MarTech, 定制工具, 数据管道, KPI ROI 看板'),
+      tags: JSON.stringify(['homepage', 'le-anh-csm', 'growth-marketing', 'technical-seo', 'ai-automation', 'martech']),
       featured: 1,
       active_home: 1,
       publish_date: new Date().toISOString(),
@@ -1106,15 +1210,9 @@ if (typeof window !== 'undefined') {
       }
     }
 
-    try {
-      await upsert('web_service_detail', kqxsLanding, ['slug']);
-      stats.ok += 1;
-      console.log(`[OK] web_service_detail/${kqxsLanding.slug}`);
-    } catch (err) {
-      stats.fail += 1;
-      stats.failDetails.push({ obj: 'web_service_detail', slug: kqxsLanding.slug, error: String(err?.message || err) });
-      console.error(`[FAIL] web_service_detail/${kqxsLanding.slug}`, err);
-    }
+    // KQXS is a menu/category landing page. Its canonical content belongs in
+    // web_services; do not create a duplicate web_service_detail row.
+    console.log(`[SKIP] web_service_detail/${kqxsLanding.slug} (category content is stored in web_services)`);
 
     try {
       await upsert('web_service_detail', homepageFromPdf, ['slug']);

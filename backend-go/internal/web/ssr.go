@@ -1829,30 +1829,10 @@ func resolveSEOForServiceRoute(
 		return strings.TrimSpace(stripHTMLToText(desc, 220))
 	}
 
-	// ── Priority 1: detail table (Java resolves detail BEFORE service) ──
-	detailFilter := model.SearchFilter{
-		Operator: "AND",
-		Conditions: []model.SearchFilter{
-			model.EqFilter("slug", slug),
-			model.EqFilter("status", "active"),
-			domainLike,
-		},
-	}
-	if detail := rm.Find(route.AppID, route.TblServiceDetail, detailFilter); len(detail) > 0 {
-		title := recordLangStr(detail, "title", lang)
-		return &seoMeta{
-			Title:       title,
-			Keywords:    strings.TrimSpace(recordLangStr(detail, "keywords", lang)),
-			Description: normalizeDescription(resolveDescriptionFromFields(rm, detail, lang)),
-			Image:       recordStr(detail, "image"),
-			Lang:        lang,
-			Slug:        slug,
-		}
-	}
-
-	// ── Priority 2: service table with is_service=true ──
+	// Menu/category routes have one path segment (/thong-ke-ket-qua-xo-so).
+	// Prefer web_services here even when an old web_service_detail row has the
+	// same slug; detail rows are reserved for /service/article routes.
 	buildServiceMeta := func(row map[string]any) *seoMeta {
-		// Java uses attributes_title first, then category (no meta_title/seo_title)
 		title := recordLangStr(row, "attributes_title", lang)
 		if title == "" {
 			title = recordLangStr(row, "category", lang)
@@ -1860,7 +1840,6 @@ func resolveSEOForServiceRoute(
 		if title == "" {
 			title = recordLangStr(row, "title", lang)
 		}
-		// Java uses attributes_keywords first
 		keywords := strings.TrimSpace(recordLangStr(row, "attributes_keywords", lang))
 		if keywords == "" {
 			keywords = strings.TrimSpace(recordLangStr(row, "keywords", lang))
@@ -1894,6 +1873,42 @@ func resolveSEOForServiceRoute(
 			conds = append(conds, domainLike)
 		}
 		return rm.Find(route.AppID, route.TblServices, model.SearchFilter{Operator: "AND", Conditions: conds})
+	}
+
+	if len(parts) == 1 && slug != "home" {
+		if row := queryServiceBySlug(true, true); len(row) > 0 {
+			return buildServiceMeta(row)
+		}
+		if row := queryServiceBySlug(true, false); len(row) > 0 {
+			return buildServiceMeta(row)
+		}
+		if row := queryServiceBySlug(false, true); len(row) > 0 {
+			return buildServiceMeta(row)
+		}
+		if row := queryServiceBySlug(false, false); len(row) > 0 {
+			return buildServiceMeta(row)
+		}
+	}
+
+	// Detail routes resolve from web_service_detail.
+	detailFilter := model.SearchFilter{
+		Operator: "AND",
+		Conditions: []model.SearchFilter{
+			model.EqFilter("slug", slug),
+			model.EqFilter("status", "active"),
+			domainLike,
+		},
+	}
+	if detail := rm.Find(route.AppID, route.TblServiceDetail, detailFilter); len(detail) > 0 {
+		title := recordLangStr(detail, "title", lang)
+		return &seoMeta{
+			Title:       title,
+			Keywords:    strings.TrimSpace(recordLangStr(detail, "keywords", lang)),
+			Description: normalizeDescription(resolveDescriptionFromFields(rm, detail, lang)),
+			Image:       recordStr(detail, "image"),
+			Lang:        lang,
+			Slug:        slug,
+		}
 	}
 
 	// Try is_service=true first (with domain, then without)
