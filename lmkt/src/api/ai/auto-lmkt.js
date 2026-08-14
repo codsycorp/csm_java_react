@@ -10516,6 +10516,22 @@ async function callAdsCampaignApi(platform, payload = {}) {
   return responseData;
 }
 
+async function callGoogleAdsManagementApi(operation, payload = {}) {
+  const ctx = resolveContext();
+  if (!ctx.apiBase) throw new Error("Thiếu apiBase (domain_api_url). Không thể gọi Google Ads API.");
+  const response = await fetch(`${ctx.apiBase}/google/ads/${operation}`, {
+    method: "POST",
+    headers: buildApiHeaders(ctx),
+    credentials: "include",
+    body: JSON.stringify(payload)
+  });
+  const text = await response.text();
+  let data = {};
+  try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${data?.message || data?.error || text}`);
+  return data;
+}
+
 async function generateAdsCreativeWithAI(input = {}) {
   const ctx = resolveContext();
 
@@ -10524,6 +10540,7 @@ async function generateAdsCreativeWithAI(input = {}) {
   const campaignName = String(input.campaign_name || "").trim();
   const domain = String(input.domain || "").trim();
   const serviceType = String(input.service_type || "").trim();
+  const keywordImageAttachment = input.keywordImageAttachment || null;
 
   const prompt = `
 Bạn là chuyên gia Performance Marketing.
@@ -10533,6 +10550,8 @@ YÊU CẦU:
 - Trả về CHỈ JSON hợp lệ, không markdown.
 - Giọng văn tự nhiên, rõ lợi ích, có CTA.
 - Nội dung an toàn chính sách, không phóng đại quá mức.
+- Nếu có ảnh bảng keyword, đọc đúng keyword, volume, difficulty, competition và avg CPC nhìn thấy trong ảnh; không tự bịa số liệu.
+- Chọn keyword phù hợp với landing page, ưu tiên search intent rõ và chi phí hợp lý; loại bỏ keyword không liên quan.
 
 NGỮ CẢNH:
 - campaign_name: ${campaignName || "Auto Campaign"}
@@ -10547,11 +10566,15 @@ JSON SCHEMA:
   "description": "...",
   "message": "...",
   "cta": "...",
-  "keywords": ["...", "..."]
+  "keywords": ["...", "..."],
+  "keyword_analysis": [{"keyword":"...","volume":"...","difficulty":"...","competition":"...","avg_cpc":"...","reason":"..."}],
+  "recommended_keywords": ["...", "..."]
 }
 `;
 
-  const aiResponse = await invokeSeoJsonFromPrompt(ctx, prompt);
+  const aiResponse = await invokeSeoJsonFromPrompt(ctx, prompt, {
+    attachments: keywordImageAttachment ? [keywordImageAttachment] : []
+  });
   let aiData = aiResponse;
 
   const headline = String(aiData?.headline || aiData?.title || campaignName || "").trim();
@@ -10559,12 +10582,13 @@ JSON SCHEMA:
   const message = String(aiData?.message || aiData?.facebook_post || aiData?.content || description || headline).trim();
   const cta = String(aiData?.cta || "Dang ky ngay").trim();
   const keywords = Array.isArray(aiData?.keywords) ? aiData.keywords.filter(Boolean) : [];
+  const recommendedKeywords = Array.isArray(aiData?.recommended_keywords) ? aiData.recommended_keywords.filter(Boolean) : [];
 
   if (!headline || !message) {
     throw new Error("AI output thiếu headline/message");
   }
 
-  return { headline, description, message, cta, keywords, raw: aiData };
+  return { headline, description, message, cta, keywords, recommendedKeywords, keywordAnalysis: aiData?.keyword_analysis || [], raw: aiData };
 }
 
 function requestAdsPushApproval(theme, preview = {}) {
@@ -10687,6 +10711,27 @@ function ensureAdsApiTestPanel() {
     return { box, input };
   };
 
+  const makeSelect = (labelText, id, options, value = "") => {
+    const box = document.createElement("div");
+    box.style.cssText = "display:flex;flex-direction:column;gap:4px";
+    const label = document.createElement("label");
+    label.htmlFor = id;
+    label.textContent = labelText;
+    label.style.cssText = `font-size:12px;font-weight:600;color:${theme.text}`;
+    const select = document.createElement("select");
+    select.id = id;
+    select.style.cssText = `padding:8px;border:1px solid ${theme.border};border-radius:4px;background:${theme.inputBg};color:${theme.text};font-size:12px`;
+    options.forEach((option) => {
+      const item = document.createElement("option");
+      item.value = option.value;
+      item.textContent = option.label;
+      item.selected = option.value === value;
+      select.appendChild(item);
+    });
+    box.append(label, select);
+    return { box, input: select };
+  };
+
   const makeTextarea = (labelText, id, placeholder = "", value = "") => {
     const box = document.createElement("div");
     box.style.cssText = "display:flex;flex-direction:column;gap:4px";
@@ -10732,6 +10777,25 @@ function ensureAdsApiTestPanel() {
     "https://example.com",
     draft.target_url || ""
   );
+  const menuField = makeSelect(
+    "Chuyên mục menu",
+    "ads-test-menu-slug",
+    [
+      { value: "phan-mem", label: "Phần Mềm" },
+      { value: "bat-dong-san", label: "Bất Động Sản" },
+      { value: "lam-dep-my-pham", label: "Mỹ Phẩm Làm Đẹp" },
+      { value: "cho-thue-xe", label: "Cho Thuê Xe 4-7 Chỗ" },
+      { value: "booking-online", label: "Đặt Lịch Online" },
+      { value: "thong-ke-ket-qua-xo-so", label: "Thống Kê Kết Quả Xổ Số" }
+    ],
+    draft.menu_slug || "phan-mem"
+  );
+  const keywordsField = makeTextarea(
+    "Từ khóa chạy Google Ads",
+    "ads-test-keywords",
+    "crm cho doanh nghiệp, phần mềm quản lý, tự động hóa",
+    draft.keywords || ""
+  );
   const headlineField = makeField(
     t('ads_lbl_headline'),
     "ads-test-headline",
@@ -10756,6 +10820,14 @@ function ensureAdsApiTestPanel() {
     t('ads_ph_ai_brief'),
     draft.ai_brief || ""
   );
+  const keywordImageField = makeField(
+    "Ảnh bảng từ khóa (AI Local đọc số liệu)",
+    "ads-test-keyword-image",
+    "Chọn PNG/JPG",
+    "",
+    "file"
+  );
+  keywordImageField.input.accept = "image/png,image/jpeg,image/webp";
 
   const fbAdAccountField = makeField(
     t('ads_lbl_fb_ad_account'),
@@ -10800,23 +10872,30 @@ function ensureAdsApiTestPanel() {
     t('ads_ph_gg_login_customer_id'),
     draft.gg_login_customer_id || ""
   );
+  const dateFromField = makeField("Từ ngày chi phí", "ads-test-date-from", "YYYY-MM-DD", draft.date_from || "");
+  const dateToField = makeField("Đến ngày chi phí", "ads-test-date-to", "YYYY-MM-DD", draft.date_to || "");
 
   grid.append(
     campaignNameField.box,
     objectiveField.box,
     budgetField.box,
     linkField.box,
+    menuField.box,
+    keywordsField.box,
     headlineField.box,
     descriptionField.box,
     messageField.box,
     aiBriefField.box,
+    keywordImageField.box,
     fbAdAccountField.box,
     fbPageIdField.box,
     fbTokenField.box,
     ggCustomerField.box,
     ggAccessTokenField.box,
     ggDevTokenField.box,
-    ggLoginCustomerField.box
+    ggLoginCustomerField.box,
+    dateFromField.box,
+    dateToField.box
   );
 
   const actionRow = document.createElement("div");
@@ -10835,6 +10914,8 @@ function ensureAdsApiTestPanel() {
   const fbBtn = createButton(t('ads_btn_test_fb'), "#1877f2");
   const ggBtn = createButton(t('ads_btn_test_gg'), "#4285f4");
   const aiPushBothBtn = createButton(t('ads_btn_ai_push'), "#722ed1");
+  const listGoogleBtn = createButton("Xem quảng cáo đang chạy", "#389e0d");
+  const costGoogleBtn = createButton("Xem chi phí Google Ads", "#d48806");
   const fillKnownIdsBtn = createButton(t('ads_btn_fill_ids'), "#13a8a8");
   const fillMinimalPayloadBtn = createButton(t('ads_btn_fill_payload'), "#2f54eb");
   const clearBtn = createButton(t('ads_btn_clear_log'), "#8c8c8c");
@@ -10851,6 +10932,10 @@ function ensureAdsApiTestPanel() {
       objective: objectiveField.input.value,
       budget: budgetField.input.value,
       target_url: linkField.input.value,
+      menu_slug: menuField.input.value,
+      keywords: keywordsField.input.value,
+      date_from: dateFromField.input.value,
+      date_to: dateToField.input.value,
       headline: headlineField.input.value,
       description: descriptionField.input.value,
       message: messageField.input.value,
@@ -10871,6 +10956,8 @@ function ensureAdsApiTestPanel() {
     objectiveField.input,
     budgetField.input,
     linkField.input,
+    menuField.input,
+    keywordsField.input,
     headlineField.input,
     descriptionField.input,
     messageField.input,
@@ -10891,7 +10978,13 @@ function ensureAdsApiTestPanel() {
   const collectCommonPayload = () => {
     const campaignName = campaignNameField.input.value.trim() || `Test Campaign ${Date.now()}`;
     const budgetNumber = Number(budgetField.input.value) || 50000;
-    const targetUrl = linkField.input.value.trim();
+    const menuSlug = menuField.input.value.trim();
+    const publicDomain = String(globalSettings.domain || "")
+      .split(",")
+      .map((value) => value.trim())
+      .find((value) => value && !/localhost|127\.0\.0\.1/i.test(value));
+    const targetUrl = linkField.input.value.trim()
+      || (publicDomain && menuSlug ? `https://${publicDomain}/${menuSlug}` : "");
     const headline = headlineField.input.value.trim() || campaignName;
     const description = descriptionField.input.value.trim();
     const message = messageField.input.value.trim() || headline;
@@ -10902,6 +10995,8 @@ function ensureAdsApiTestPanel() {
       app_id: resolveContext().app_id,
       domain: globalSettings.domain,
       service_type: globalSettings.isLmkt ? globalSettings.project : globalSettings.industry,
+      menu_slug: menuSlug,
+      keywords: keywordsField.input.value.trim(),
       campaign_name: campaignName,
       name: campaignName,
       objective,
@@ -10956,6 +11051,20 @@ function ensureAdsApiTestPanel() {
     };
   };
 
+  const buildGoogleManagementPayload = () => {
+    const payload = buildGooglePayload();
+    return {
+      customer_id: payload.customer_id,
+      access_token: payload.access_token,
+      developer_token: payload.developer_token,
+      login_customer_id: payload.login_customer_id,
+      menu_slug: payload.menu_slug,
+      keywords: payload.keywords,
+      date_from: dateFromField.input.value.trim(),
+      date_to: dateToField.input.value.trim()
+    };
+  };
+
   fbBtn.onclick = async () => {
     const payload = buildFacebookPayload();
     if (!payload.target_url) {
@@ -11002,6 +11111,30 @@ function ensureAdsApiTestPanel() {
     }
   };
 
+  listGoogleBtn.onclick = async () => {
+    setLoading(listGoogleBtn, true);
+    try {
+      const result = await callGoogleAdsManagementApi("list", buildGoogleManagementPayload());
+      appendAdsTesterLog(logArea, "Google campaigns đang chạy", result);
+      adsTesterNotify("Đã tải danh sách quảng cáo Google đang chạy", "success");
+    } catch (e) {
+      appendAdsTesterLog(logArea, "Google campaigns error", e.message || String(e));
+      adsTesterNotify(`Google Ads: ${e.message || e}`, "error");
+    } finally { setLoading(listGoogleBtn, false); }
+  };
+
+  costGoogleBtn.onclick = async () => {
+    setLoading(costGoogleBtn, true);
+    try {
+      const result = await callGoogleAdsManagementApi("cost", buildGoogleManagementPayload());
+      appendAdsTesterLog(logArea, "Google Ads chi phí", result);
+      adsTesterNotify("Đã tải chi phí và chỉ số Google Ads", "success");
+    } catch (e) {
+      appendAdsTesterLog(logArea, "Google cost error", e.message || String(e));
+      adsTesterNotify(`Google Ads: ${e.message || e}`, "error");
+    } finally { setLoading(costGoogleBtn, false); }
+  };
+
   aiPushBothBtn.onclick = async () => {
     const common = collectCommonPayload();
     if (!common.target_url) {
@@ -11031,7 +11164,15 @@ function ensureAdsApiTestPanel() {
         target_url: common.target_url,
         campaign_name: common.campaign_name,
         domain: common.domain,
-        service_type: common.service_type
+        service_type: common.service_type,
+        keywordImageAttachment: keywordImageField.input.files?.[0]
+          ? {
+            kind: "image",
+            mimeType: keywordImageField.input.files[0].type || "image/jpeg",
+            name: keywordImageField.input.files[0].name || "keyword-stats.png",
+            base64Data: await readFileAsBase64(keywordImageField.input.files[0])
+          }
+          : null
       });
 
       headlineField.input.value = aiCreative.headline || headlineField.input.value;
@@ -11114,7 +11255,7 @@ function ensureAdsApiTestPanel() {
     logArea.value = "";
   };
 
-  actionRow.append(fbBtn, ggBtn, aiPushBothBtn, fillKnownIdsBtn, fillMinimalPayloadBtn, clearBtn);
+  actionRow.append(fbBtn, ggBtn, aiPushBothBtn, listGoogleBtn, costGoogleBtn, fillKnownIdsBtn, fillMinimalPayloadBtn, clearBtn);
   wrapper.append(title, hint, grid, approvalToggleRow, actionRow, logArea);
 
   const container = ensureUnifiedUIContainer();
@@ -11269,7 +11410,7 @@ function buildSeoPromptFallbackFromOneShotContext(seoContext = {}) {
  * POST /ai-generate-seo-content — ưu tiên window.csmAI (ky, cùng auth get-table-data).
  * Fallback raw fetch chỉ khi chạy ngoài admin SPA (không có csmAI bridge).
  */
-async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, prompt }) {
+async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, prompt, attachments }) {
   const safeCtx = ctx && (ctx.apiBase !== undefined || ctx.seftObj) ? ctx : resolveContext();
   const helperAi = resolveSeoKyClient(safeCtx);
 
@@ -11288,7 +11429,7 @@ async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, p
       if (!fallbackPrompt) {
         throw new Error("Thiếu prompt fallback cho SEO one-shot khi helper không hỗ trợ generateSeoAntiAiOneShot");
       }
-      result = await helperAi.generateSeoContentWithPrompt(fallbackPrompt, { taskType: "seo_content" });
+      result = await helperAi.generateSeoContentWithPrompt(fallbackPrompt, { taskType: "seo_content", attachments });
     } else if (typeof helperAi.csm_ai_generate_seo_content === "function") {
       if (!fallbackPrompt) {
         throw new Error("Thiếu prompt fallback cho SEO one-shot khi helper không hỗ trợ generateSeoAntiAiOneShot");
@@ -11304,6 +11445,7 @@ async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, p
   }
 
   const body = { mode: "sync", async: false, taskType: "seo_content" };
+  if (Array.isArray(attachments) && attachments.length > 0) body.attachments = attachments;
   if (useSeoOneShot) {
     body.seoPipeline = "anti_ai_one_shot";
     body.seoContext = oneShotPayload;
@@ -11477,6 +11619,7 @@ async function invokeSeoAiLocal(ctx, opts = {}) {
     useSeoOneShot: !!useSeoOneShot,
     oneShotPayload,
     prompt: useSeoOneShot ? null : prompt,
+    attachments: opts.attachments,
   });
 
   if (expect === "api") {
@@ -11508,8 +11651,8 @@ async function invokeSeoArticleFromPrompt(ctx, prompt) {
 }
 
 /** Task phụ (FB post, ads, creative-params) — trả object JSON từ model. */
-async function invokeSeoJsonFromPrompt(ctx, prompt) {
-  const out = await invokeSeoAiLocal(ctx, { prompt, expect: "json" });
+async function invokeSeoJsonFromPrompt(ctx, prompt, options = {}) {
+  const out = await invokeSeoAiLocal(ctx, { prompt, expect: "json", attachments: options.attachments });
   if (!out.ok) throw new Error(out.error || "AI không trả về JSON hợp lệ");
   return out.payload;
 }

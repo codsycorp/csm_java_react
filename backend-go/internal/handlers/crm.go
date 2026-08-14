@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"strings"
 
 	"csm_server/backend-go/internal/model"
@@ -128,7 +129,34 @@ func (h *CrmHandler) HandleCreateAd(params map[string]any, auth *security.AuthUs
 	if auth == nil {
 		return model.ErrorResponse(401, "Not authenticated")
 	}
-	return model.OKResponse(h.crm.CreateAd(h.resolveAppID(params, auth), params))
+	result := h.crm.CreateAd(h.resolveAppID(params, auth), params)
+	if success, ok := result["success"].(bool); ok && !success {
+		message, _ := result["message"].(string)
+		return model.ErrorResponse(400, message)
+	}
+	return model.OKResponse(result)
+}
+
+func (h *CrmHandler) HandleGoogleAdsList(params map[string]any, auth *security.AuthUser) *model.StandardResponse {
+	if auth == nil {
+		return model.ErrorResponse(401, "Not authenticated")
+	}
+	result := h.crm.ListGoogleAds(params)
+	if success, _ := result["success"].(bool); !success {
+		return model.ErrorResponse(400, fmt.Sprint(result["message"]))
+	}
+	return model.OKResponse(result)
+}
+
+func (h *CrmHandler) HandleGoogleAdsCost(params map[string]any, auth *security.AuthUser) *model.StandardResponse {
+	if auth == nil {
+		return model.ErrorResponse(401, "Not authenticated")
+	}
+	result := h.crm.GetGoogleAdsCost(params)
+	if success, _ := result["success"].(bool); !success {
+		return model.ErrorResponse(400, fmt.Sprint(result["message"]))
+	}
+	return model.OKResponse(result)
 }
 
 func (h *CrmHandler) HandleGetAds(params map[string]any, auth *security.AuthUser) *model.StandardResponse {

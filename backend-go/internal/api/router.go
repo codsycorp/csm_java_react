@@ -161,6 +161,10 @@ func DispatchAPI(st *state.AppState, method, path string, params map[string]any,
 		return st.SocialHandler.HandleCreateAdCampaign(params, "facebook_ads", auth)
 	case "/google/ads/campaign":
 		return st.SocialHandler.HandleCreateAdCampaign(params, "google_ads", auth)
+	case "/google/ads/list":
+		return st.CrmHandler.HandleGoogleAdsList(params, auth)
+	case "/google/ads/cost":
+		return st.CrmHandler.HandleGoogleAdsCost(params, auth)
 
 	case "/chat-history", "/chat-history-guest", "/chat-history-app",
 		"/chat-guests-list", "/chat-mark-read", "/chat-mark-read-guest",
