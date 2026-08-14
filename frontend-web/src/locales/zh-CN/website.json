@@ -60,7 +60,7 @@
     "projects": "项目完成",
     "satisfaction": "满意客户",
     "experience": "年经验",
-    "sectors": "业务领域"
+    "sectors": "商业合作"
   },
   "products": {
     "title": "领先的软件工具",
@@ -365,10 +365,10 @@
     }
   },
   "business": {
-    "title": "多行业业务桥梁",
-    "subtitle": "连接和发展多行业，创造可持续的商业机会",
-    "categories_title": "业务领域",
-    "categories_subtitle": "连接和发展多行业，提供最新信息和市场趋势",
+    "title": "商业合作",
+    "subtitle": "开展跨行业合作与发展，创造可持续的商业机会",
+    "categories_title": "商业合作",
+    "categories_subtitle": "基于最新信息和市场趋势开展跨行业合作",
     "realestate": {
       "title": "房地产",
       "desc": "连接客户与信誉房地产项目",

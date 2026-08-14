@@ -68,7 +68,7 @@ fi
 echo "=== Xoá file alifc_jbackend.jar trên OSS sau khi deploy ==="
 ossutil rm oss://$OSS_BUCKET_NAME/alifc_jbackend.jar --config-file $OSSUTIL_CONFIG_PATH --force
 echo "=== Clean Frontend Build Directory ==="
-cd frontend
+cd frontend-web
 if [ -d "dist" ]; then
     rm -rf dist
 fi
@@ -78,7 +78,7 @@ echo "=== Build ==="
 if [ -f "package.json" ]; then
     pnpm build
     if [ $? -ne 0 ]; then
-        echo "Error: Gatsby build failed!"
+        echo "Error: frontend-web build failed!"
         exit 1
     fi
 else
@@ -88,7 +88,7 @@ fi
 
 # Ensure Gatsby build completes successfully
 if [ ! -d "dist" ]; then
-    echo "Error: Gatsby build did not generate the Dist directory!"
+    echo "Error: frontend-web build did not generate the Dist directory!"
     exit 1
 fi
 
@@ -106,36 +106,36 @@ echo "=== Xóa thư mục frontend trên OSS ==="
 ossutil rm -r oss://$OSS_BUCKET_NAME/frontend/ --config-file $OSSUTIL_CONFIG_PATH --force
 
 # Kiểm tra xem thư mục public có tồn tại không
-if [ -d "frontend/dist" ]; then
+if [ -d "frontend-web/dist" ]; then
     echo "=== Creating version.json ==="
-    echo '{"version": "'$(date +%Y%m%d%H%M%S)'"}' > frontend/dist/version.json
+    echo '{"version": "'$(date +%Y%m%d%H%M%S)'"}' > frontend-web/dist/version.json
 
     echo "=== Upload Frontend lên OSS ==="
-    ossutil cp -r frontend/dist/ oss://$OSS_BUCKET_NAME --config-file $OSSUTIL_CONFIG_PATH --force
+    ossutil cp -r frontend-web/dist/ oss://$OSS_BUCKET_NAME --config-file $OSSUTIL_CONFIG_PATH --force
     if [ $? -eq 0 ]; then
         echo "Frontend uploaded successfully."
 
         # Tạo sitemap.xml
-        echo '<?xml version="1.0" encoding="UTF-8"?>' > frontend/dist/sitemap.xml
-        echo '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' >> frontend/dist/sitemap.xml
-        echo '  <url>' >> frontend/dist/sitemap.xml
-        echo '    <loc>https://www.vn369.net/</loc>' >> frontend/dist/sitemap.xml
-        echo '  </url>' >> frontend/dist/sitemap.xml
-        echo '</urlset>' >> frontend/dist/sitemap.xml
+        echo '<?xml version="1.0" encoding="UTF-8"?>' > frontend-web/dist/sitemap.xml
+        echo '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' >> frontend-web/dist/sitemap.xml
+        echo '  <url>' >> frontend-web/dist/sitemap.xml
+        echo '    <loc>https://www.vn369.net/</loc>' >> frontend-web/dist/sitemap.xml
+        echo '  </url>' >> frontend-web/dist/sitemap.xml
+        echo '</urlset>' >> frontend-web/dist/sitemap.xml
 
         # Tạo robots.txt
-        echo 'User-agent: *' > frontend/dist/robots.txt
-        echo 'Allow: /' >> frontend/dist/robots.txt
-        echo 'Sitemap: https://www.vn369.net/sitemap.xml' >> frontend/dist/robots.txt
+        echo 'User-agent: *' > frontend-web/dist/robots.txt
+        echo 'Allow: /' >> frontend-web/dist/robots.txt
+        echo 'Sitemap: https://www.vn369.net/sitemap.xml' >> frontend-web/dist/robots.txt
 
         # Tải lên các tệp index.html, sitemap.xml và robots.txt
-        ossutil cp frontend/dist/index.html oss://$OSS_BUCKET_NAME/frontend/index.html --config-file $OSSUTIL_CONFIG_PATH --force
-        ossutil cp frontend/dist/sitemap.xml oss://$OSS_BUCKET_NAME/frontend/sitemap.xml --config-file $OSSUTIL_CONFIG_PATH --force
-        ossutil cp frontend/dist/robots.txt oss://$OSS_BUCKET_NAME/frontend/robots.txt --config-file $OSSUTIL_CONFIG_PATH --force
-        ossutil cp frontend/dist/version.json oss://$OSS_BUCKET_NAME/version.json --config-file $OSSUTIL_CONFIG_PATH --force
+        ossutil cp frontend-web/dist/index.html oss://$OSS_BUCKET_NAME/frontend/index.html --config-file $OSSUTIL_CONFIG_PATH --force
+        ossutil cp frontend-web/dist/sitemap.xml oss://$OSS_BUCKET_NAME/frontend/sitemap.xml --config-file $OSSUTIL_CONFIG_PATH --force
+        ossutil cp frontend-web/dist/robots.txt oss://$OSS_BUCKET_NAME/frontend/robots.txt --config-file $OSSUTIL_CONFIG_PATH --force
+        ossutil cp frontend-web/dist/version.json oss://$OSS_BUCKET_NAME/version.json --config-file $OSSUTIL_CONFIG_PATH --force
 
         # Tạo symbolic link cho index.html ở thư mục gốc
-        ossutil cp frontend/dist/index.html oss://$OSS_BUCKET_NAME/index.html --config-file $OSSUTIL_CONFIG_PATH --force
+        ossutil cp frontend-web/dist/index.html oss://$OSS_BUCKET_NAME/index.html --config-file $OSSUTIL_CONFIG_PATH --force
 
         if [ $? -eq 0 ]; then
             echo "index.html, sitemap.xml, and robots.txt uploaded successfully."

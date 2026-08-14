@@ -63,7 +63,7 @@
     "projects": "Dự Án Hoàn Thành",
     "satisfaction": "Khách Hàng Hài Lòng",
     "experience": "Năm Kinh Nghiệm",
-    "sectors": "Lĩnh Vực Kinh Doanh"
+    "sectors": "Hợp Tác Kinh Doanh"
   },
   "products": {
     "title": "Viết phần mềm theo yêu cầu & Dịch Vụ Phần Mềm",
@@ -376,10 +376,10 @@
     }
   },
   "business": {
-    "title": "Cầu Nối Các Lĩnh Vực Kinh Doanh",
-    "subtitle": "Kết nối và phát triển đa ngành nghề, tạo cơ hội kinh doanh bền vững",
-    "categories_title": "Các Lĩnh Vực Kinh Doanh",
-    "categories_subtitle": "Kết nối và phát triển đa ngành nghề với thông tin cập nhật và xu hướng thị trường",
+    "title": "Hợp Tác Kinh Doanh",
+    "subtitle": "Hợp tác và phát triển đa ngành nghề, tạo cơ hội kinh doanh bền vững",
+    "categories_title": "Hợp Tác Kinh Doanh",
+    "categories_subtitle": "Hợp tác đa ngành nghề với thông tin cập nhật và xu hướng thị trường",
     "realestate": {
       "title": "Bất Động Sản",
       "desc": "Kết nối khách hàng với các dự án bất động sản uy tín",
@@ -499,7 +499,7 @@
     "location": "TP.HCM , Việt Nam",
     "softwareTools": "Công Cụ Phần Mềm",
     "mainPages": "Trang Chính",
-    "businessSectors": "Lĩnh Vực Kinh Doanh",
+    "businessSectors": "Hợp Tác Kinh Doanh",
     "products": "Sản Phẩm",
     "services": "Dịch Vụ",
     "businessSupport": "Lĩnh Vực & Hỗ Trợ",

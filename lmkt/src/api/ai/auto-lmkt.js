@@ -826,7 +826,7 @@ if (typeof window !== 'undefined') {
         is_group_slug: true,
         is_group_slug_default: false,
         group_slug: '',
-        attributes_icon: 'DatabaseOutlined',
+        attributes_icon: 'AreaChartOutlined',
         attributes_color: '#13c2c2',
         attributes_priority: 1,
         attributes_title: 'Thống kê kết quả xổ số 3 miền từ 2005 và viết tool theo yêu cầu',

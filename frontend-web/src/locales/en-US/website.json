@@ -60,7 +60,7 @@
     "projects": "Projects Completed",
     "satisfaction": "Happy Clients",
     "experience": "Years Experience",
-    "sectors": "Business Sectors"
+    "sectors": "Business Partnership"
   },
   "products": {
     "title": "Leading Software Tools",
@@ -366,10 +366,10 @@
     }
   },
   "business": {
-    "title": "Bridge Multi-Industry Businesses",
-    "subtitle": "Connect and develop multi-industry, create sustainable business opportunities",
-    "categories_title": "Business Sectors",
-    "categories_subtitle": "Connect and develop multi-industry with updated information and market trends",
+    "title": "Business Partnership",
+    "subtitle": "Partner and grow across industries to create sustainable business opportunities",
+    "categories_title": "Business Partnership",
+    "categories_subtitle": "Build cross-industry partnerships with updated information and market trends",
     "realestate": {
       "title": "Real Estate",
       "desc": "Connect customers with reputable real estate projects",
@@ -477,7 +477,7 @@
     "location": "TP.HCM, Vietnam",
     "softwareTools": "Software Tools",
     "mainPages": "Main Pages",
-    "businessSectors": "Business Sectors",
+    "businessSectors": "Business Partnership",
     "products": "Products",
     "services": "Services",
     "businessSupport": "Industries & Support",

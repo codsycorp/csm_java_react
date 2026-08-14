@@ -3,6 +3,7 @@ import React from "react";
 import {
   HomeOutlined,
   DatabaseOutlined,
+  AreaChartOutlined,
   ApartmentOutlined,
   ReadOutlined,
   MailOutlined,
@@ -138,6 +139,7 @@ export function useWebsiteMenu() {
   const iconMap: Record<string, React.ReactNode> = {
     HomeOutlined: <HomeOutlined />,
     DatabaseOutlined: <DatabaseOutlined />,
+    AreaChartOutlined: <AreaChartOutlined />,
     ApartmentOutlined: <ApartmentOutlined />,
     CodeOutlined: <CodeOutlined />,
     ShoppingCartOutlined: <ShoppingCartOutlined />,

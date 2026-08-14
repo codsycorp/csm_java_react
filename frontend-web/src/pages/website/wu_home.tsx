@@ -84,8 +84,6 @@ import {
   Typography,
   Button,
   Tag,
-  Avatar,
-  Rate,
 } from "antd";
 import {
   RocketOutlined,
@@ -100,9 +98,8 @@ import {
 } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import styles from "#src/layout/website/websiteLayout.module.css";
-import { fetchServiceList } from "#src/api/wu_service";
 
-const { Title, Paragraph, Text } = Typography;
+const { Paragraph } = Typography;
 
 // Inline SVG placeholder generator
 const generatePlaceholder = (text: string, bgColor: string = '1890ff') => {
@@ -149,13 +146,6 @@ export default function WuHome() {
     return localizePath(`/${defaultSlug}`, lang || 'vi');
   };
   const getContactUrl = () => '/lien-he';
-  const computePostHref = (post: ServicePost) => {
-    const tags = (post.tags || []).map(s => String(s).toLowerCase());
-    if (tags.includes('xem-ngay')) return '/xem-ngay';
-    const lang = getLangCode();
-    return localizePath(`/${post.serviceType}/${post.slug}`, lang || 'vi');
-  };
-
   // Enhanced Hero Section with modern design and SEO structure
   const HeroSection = () => (
     <section
@@ -351,68 +341,20 @@ export default function WuHome() {
     ];
   }, [ssrCategories, i18n.language, t, iconMap]);
 
-  // Client testimonials with translations
-  const testimonials = [
-    {
-      name: t('website.testimonials.client1.name', 'Nguyễn Văn A'),
-      company: t('website.testimonials.client1.company', 'ABC Company'),
-      content: t('website.testimonials.client1.content', 'Tool Traffic Google đã giúp website của chúng tôi tăng trưởng 300% lượt truy cập trong 3 tháng.'),
-      rating: 5,
-      avatar: "https://randomuser.me/api/portraits/men/1.jpg",
-    },
-    {
-      name: t('website.testimonials.client2.name', 'Trần Thị B'),
-      company: t('website.testimonials.client2.company', 'XYZ Corp'),
-      content: t('website.testimonials.client2.content', 'Phần mềm cào dữ liệu rất hiệu quả, tiết kiệm 80% thời gian thu thập thông tin khách hàng.'),
-      rating: 5,
-      avatar: "https://randomuser.me/api/portraits/women/2.jpg",
-    },
-    {
-      name: t('website.testimonials.client3.name', 'Lê Minh C'),
-      company: t('website.testimonials.client3.company', 'Tech Startup'),
-      content: t('website.testimonials.client3.content', 'Dịch vụ phát triển phần mềm chuyên nghiệp, đúng tiến độ và vượt mong đợi.'),
-      rating: 5,
-      avatar: "https://randomuser.me/api/portraits/men/3.jpg",
-    },
-  ];
-
   // State cho sản phẩm nổi bật và đặc biệt lấy từ API hoặc mock
-  const [featuredSoftwarePosts, setFeaturedSoftwarePosts] = useState<ServicePost[]>([]);
-  const [specialSoftwarePosts, setSpecialSoftwarePosts] = useState<ServicePost[]>([]);
   const [homeCmsContent, setHomeCmsContent] = useState<string>('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [featuredPage, setFeaturedPage] = useState(1);
-  const [specialPage, setSpecialPage] = useState(1);
-  const PAGE_SIZE = 3;
   React.useEffect(() => {
-    setLoading(true);
-    setError(null);
-    
-    // 1. Ưu tiên sử dụng dữ liệu SSR từ backend
-    let ssrList: ServicePost[] | undefined = undefined;
+    let ssrList: ServicePost[] = [];
     try {
       const w: any = typeof window !== 'undefined' ? window : undefined;
       const initial = w && (w.__INITIAL_REACT_DATA__ || w.initialReactData);
-      
-      // SSR Home: Checking data
-      
-      // Check if SSR data matches current page (homepage)
       const ssrPath = normalizeWebsitePath(initial?.currentPagePath || '/');
       const currentPath = normalizeWebsitePath(w?.location?.pathname || '/');
       if (initial && (ssrPath === '/' || ssrPath === currentPath)) {
-        let dataList = null;
-        
-        // Priority: homeDetailList (homepage) > serviceDetailList (fallback)
-        if (Array.isArray(initial.homeDetailList) && initial.homeDetailList.length > 0) {
-          dataList = initial.homeDetailList;
-          // SSR: Found posts in homeDetailList
-        } else if (Array.isArray(initial.serviceDetailList) && initial.serviceDetailList.length > 0) {
-          dataList = initial.serviceDetailList;
-          // SSR: Found posts in serviceDetailList (fallback)
-        }
-        
-        if (dataList) {
+        const dataList = Array.isArray(initial.homeDetailList)
+          ? initial.homeDetailList
+          : (Array.isArray(initial.serviceDetailList) ? initial.serviceDetailList : []);
+        if (dataList.length > 0) {
           const getThumbnail = (p: any): string => {
             const value = p.thumbnail || p.cover || '';
             if (Array.isArray(value)) return value[0] || '';
@@ -440,60 +382,33 @@ export default function WuHome() {
             activeHome: !!p.activeHome || !!p.active_home,
             attributes: typeof p.attributes === 'string' ? JSON.parse(p.attributes) : (p.attributes || {}),
           }));
-          if (ssrList) {
-            // SSR: Normalized home posts from SSR data
-          }
         }
       }
-    } catch (e) {
-      // Error loading SSR data
+    } catch {
+      ssrList = [];
     }
-    
-    // If SSR data available, use it and skip API
-    if (ssrList && ssrList.length > 0) {
+
+    if (ssrList.length > 0) {
       const homeEntry = ssrList.find((post) => post.slug === 'home' || post.serviceType === 'home');
       setHomeCmsContent(sanitizeHomeHtml(getLocalizedHomeContent(homeEntry, i18n.language)));
-
-      // Keep card sections focused on actual service posts.
-      const servicePosts = ssrList.filter((post) => post.serviceType !== 'home' && post.slug !== 'home');
-      const filteredList = servicePosts.filter((post) => post.serviceType === 'phan-mem');
-      const featuredData = filteredList.filter((post) => !!post.featured);
-      const specialData = filteredList.filter((post) => !!post.activeHome);
-      setFeaturedSoftwarePosts(featuredData.length > 0 ? featuredData : filteredList.slice(0, 6));
-      setSpecialSoftwarePosts(specialData.length > 0 ? specialData : filteredList.slice(6, 12));
-      setLoading(false);
-      // Using SSR data, filtered to 'phan-mem', skipping API call
-      return;
+    } else {
+      setHomeCmsContent('');
     }
-    
-    // 2. Fallback to API if no SSR data
-    // No SSR data, fetching from API...
-    // Server-side filter: only active + category 'phan-mem'. We still filter featured/activeHome client-side.
-    fetchServiceList('phan-mem', 20, undefined, { q: undefined })
-      .then((res) => {
-        // API: fetchServiceList response
-        const data = Array.isArray(res?.data) ? res.data as ServicePost[] : [];
-        const featuredData = data.filter((post) => !!post.featured);
-        const specialData = data.filter((post) => !!post.activeHome);
-        setFeaturedSoftwarePosts(featuredData.length > 0 ? featuredData : data.slice(0, 6));
-        setSpecialSoftwarePosts(specialData.length > 0 ? specialData : data.slice(6, 12));
-        // API: Loaded featured and special
-      }).catch((err) => {
-        // API Error
-        setFeaturedSoftwarePosts([]);
-        setSpecialSoftwarePosts([]);
-        setError('Lỗi tải dữ liệu');
-      })
-      .finally(() => setLoading(false));
   }, []);
-  const featuredTotalPages = Math.ceil(featuredSoftwarePosts.length / PAGE_SIZE);
-  const specialTotalPages = Math.ceil(specialSoftwarePosts.length / PAGE_SIZE);
-  const featuredPagePosts = featuredSoftwarePosts.slice((featuredPage-1)*PAGE_SIZE, featuredPage*PAGE_SIZE);
-  const specialPagePosts = specialSoftwarePosts.slice((specialPage-1)*PAGE_SIZE, specialPage*PAGE_SIZE);
   const belowFoldSectionStyle: React.CSSProperties = {
     contentVisibility: 'auto',
     containIntrinsicSize: '1000px',
   };
+  const businessSectorsTitle = i18n.language?.startsWith('en')
+    ? 'Business Partnership'
+    : i18n.language?.startsWith('zh')
+      ? '商业合作'
+      : 'Hợp Tác Kinh Doanh';
+  const businessSectorsSubtitle = i18n.language?.startsWith('en')
+    ? 'Partnership across industries, services and business solutions on one platform'
+    : i18n.language?.startsWith('zh')
+      ? '在一个平台开展多行业、多服务和多种业务解决方案合作'
+      : 'Hợp tác đa ngành, đa lĩnh vực và đa dịch vụ trên một nền tảng';
 
   return (
 
@@ -507,232 +422,6 @@ export default function WuHome() {
           </div>
         </section>
       ) : null}
-
-      {/* Debug: show counts when loaded (helps identify missing data) */}
-      {!loading && featuredSoftwarePosts.length === 0 && specialSoftwarePosts.length === 0 && (
-        <div style={{ textAlign: 'center', padding: 24, color: 'var(--text-secondary)' }}>
-          <strong>Không có dữ liệu hiển thị trên trang chủ.</strong>
-          {/* Debug info removed for production */}
-        </div>
-      )}
-
-  {/* Main Products Section */}
-      <div style={{ 
-        padding: "100px 24px",
-        background: "var(--bg-primary)",
-        ...belowFoldSectionStyle,
-      }}>
-        <Row justify="center">
-          <Col xs={24} lg={20}>
-            <div style={{ textAlign: "center", marginBottom: "60px" }}>
-              <h2 style={{ 
-                color: "var(--text-primary)", 
-                marginBottom: "1rem",
-                fontSize: "clamp(2rem, 4vw, 3rem)"
-              }}
-            >
-              {t('website.products.title', 'Các công cụ và dịch vụ nổi bật')}
-              </h2>
-              <Paragraph style={{ 
-                fontSize: "18px", 
-                color: "var(--text-secondary)", 
-                maxWidth: "600px", 
-                margin: "0 auto" 
-              }}
-            >
-                {t('website.products.subtitle', 'Cung cấp các công cụ phần mềm và dịch vụ phát triển chuyên nghiệp giúp doanh nghiệp tối ưu hóa hoạt động và tăng trưởng bền vững')}
-              </Paragraph>
-            </div>
-            
-            <Row gutter={[32, 32]}>
-              {featuredPagePosts.map((post) => {
-                return (
-                  <Col xs={24} lg={8} key={post.id}>
-                    <Card
-                      className={styles.productCard}
-                      style={{
-                        height: "100%",
-                        borderRadius: "20px",
-                        overflow: "hidden",
-                        border: "1px solid var(--card-border)",
-                        boxShadow: "var(--card-shadow)",
-                        transition: "all 0.3s ease",
-                        background: "var(--card-bg)",
-                        cursor: "pointer",
-                      }}
-                      hoverable
-                      cover={
-                        <a href={computePostHref(post)} aria-label={post.title} style={{ display:'block' }}>
-                          <img 
-                            src={post.thumbnail || generatePlaceholder(post.title.substring(0, 30), '1890ff')} 
-                            alt={post.title} 
-                            loading="lazy"
-                            decoding="async"
-                            fetchPriority="low"
-                            width={400}
-                            height={180}
-                            style={{ height: 180, objectFit: "cover" }} 
-                            onError={(e) => { 
-                              const target = e.target as HTMLImageElement;
-                              if (!target.src.startsWith('data:')) {
-                                target.onerror = null; 
-                                target.src = generatePlaceholder('Image Error', 'cccccc');
-                              }
-                            }}
-                          />
-                        </a>
-                      }
-                    >
-                      <h3 style={{ fontWeight: 700, fontSize: 20, marginBottom: 8 }}>
-                        <a href={computePostHref(post)} style={{ color: 'var(--brand-primary)', textDecoration: 'none' }} aria-label={post.title}>{post.title}</a>
-                      </h3>
-                      <Paragraph style={{ color: "var(--text-secondary)", minHeight: 48 }}>{post.excerpt}</Paragraph>
-                      <div style={{ marginTop: 12 }}>
-                        {post.attributes?.downloadLink ? (
-                          <Button type="primary" href={post.attributes.downloadLink} target="_blank" rel="noopener noreferrer">
-                            {t("website.products.download", "Tải ứng dụng")}
-                          </Button>
-                        ) : (
-                          <Button type="link" href={computePostHref(post)}>
-                            {t("website.products.detail", "Xem chi tiết")}
-                          </Button>
-                        )}
-                      </div>
-                    </Card>
-                  </Col>
-                );
-              })}
-            </Row>
-            {/* Pagination for featured: only show if more than 1 page */}
-            {featuredTotalPages > 1 && (
-              <div style={{ textAlign: "center", marginTop: 32 }}>
-                <Button
-                  disabled={featuredPage === 1}
-                  onClick={() => setFeaturedPage(p => Math.max(1, p-1))}
-                  style={{ marginRight: 12 }}
-                >
-                  {t('website.pagination.prev', 'Trước')}
-                </Button>
-                <span style={{ fontWeight: 500, color: "var(--text-secondary)" }}>{featuredPage} / {featuredTotalPages}</span>
-                <Button
-                  disabled={featuredPage === featuredTotalPages}
-                  onClick={() => setFeaturedPage(p => Math.min(featuredTotalPages, p+1))}
-                  style={{ marginLeft: 12 }}
-                >
-                  {t('website.pagination.next', 'Sau')}
-                </Button>
-              </div>
-            )}
-          </Col>
-        </Row>
-      </div>
-
-  {/* Software Services Section */}
-      <div style={{ 
-        padding: "100px 24px",
-        background: "var(--bg-primary)",
-        ...belowFoldSectionStyle,
-      }}>
-        <Row justify="center">
-          <Col xs={24} lg={20}>
-            <div style={{ textAlign: "center", marginBottom: "60px" }}>
-              <h2 style={{ 
-                color: "var(--text-primary)", 
-                marginBottom: "1rem",
-                fontSize: "clamp(2rem, 4vw, 3rem)"
-              }}>
-                {t('website.services.title', 'Viết phần mềm theo yêu cầu')}
-              </h2>
-              <Paragraph style={{ 
-                fontSize: "18px", 
-                color: "var(--text-secondary)", 
-                maxWidth: "600px", 
-                margin: "0 auto" 
-              }}>
-                {t('website.services.subtitle', 'Cung cấp giải pháp công nghệ toàn diện từ thiết kế đến triển khai')}
-              </Paragraph>
-            </div>
-            <Row gutter={[32, 32]}>
-              {specialPagePosts.length === 0 ? (
-                <Col span={24} style={{ textAlign: 'center', color: 'var(--text-secondary)', fontSize: 18 }}>
-                  {t('website.services.noSpecial', 'Hiện chưa có dịch vụ phần mềm đặc biệt nào.')}
-                </Col>
-              ) : (
-                specialPagePosts.map((post) => {
-                  return (
-                    <Col xs={24} lg={8} key={post.id}>
-                      <Card
-                        className={styles.productCard}
-                        style={{
-                          height: "100%",
-                          borderRadius: "20px",
-                          overflow: "hidden",
-                          border: "1px solid var(--card-border)",
-                          boxShadow: "var(--card-shadow)",
-                          transition: "all 0.3s ease",
-                          background: "var(--card-bg)",
-                          cursor: "pointer",
-                        }}
-                        hoverable
-                        cover={
-                          <a href={computePostHref(post)} aria-label={post.title} style={{ display:'block' }}>
-                            <img 
-                              src={post.thumbnail || generatePlaceholder(post.title.substring(0, 30), '52c41a')} 
-                              alt={post.title} 
-                              loading="lazy"
-                              decoding="async"
-                              fetchPriority="low"
-                              width={400}
-                              height={180}
-                              style={{ height: 180, objectFit: "cover" }} 
-                              onError={(e) => { 
-                                const target = e.target as HTMLImageElement;
-                                if (!target.src.startsWith('data:')) {
-                                  target.onerror = null; 
-                                  target.src = generatePlaceholder('Image Error', 'cccccc');
-                                }
-                              }}
-                            />
-                          </a>
-                        }
-                      >
-                        <h3 style={{ fontWeight: 700, fontSize: 20, marginBottom: 8 }}>
-                          <a href={computePostHref(post)} style={{ color: 'var(--brand-primary)', textDecoration: 'none' }} aria-label={post.title}>{post.title}</a>
-                        </h3>
-                        <Paragraph style={{ color: "var(--text-secondary)", minHeight: 48 }}>{post.excerpt}</Paragraph>
-                        <div style={{ marginTop: 12 }}>
-                          <Button type="link" href={computePostHref(post)}>{t('website.products.detail', 'Xem chi tiết')}</Button>
-                        </div>
-                      </Card>
-                    </Col>
-                  );
-                })
-              )}
-            </Row>
-            {/* Pagination for special: only show if more than 1 page */}
-            {specialTotalPages > 1 && (
-              <div style={{ textAlign: "center", marginTop: 32 }}>
-                <Button
-                  disabled={specialPage === 1}
-                  onClick={() => setSpecialPage(p => Math.max(1, p-1))}
-                  style={{ marginRight: 12 }}
-                >
-                  {t('website.pagination.prev', 'Trước')}
-                </Button>
-                <span style={{ fontWeight: 500, color: "var(--text-secondary)" }}>{specialPage} / {specialTotalPages}</span>
-                <Button
-                  disabled={specialPage === specialTotalPages}
-                  onClick={() => setSpecialPage(p => Math.min(specialTotalPages, p+1))}
-                  style={{ marginLeft: 12 }}
-                >
-                  {t('website.pagination.next', 'Sau')}
-                </Button>
-              </div>
-            )}
-          </Col>
-        </Row>
-      </div>
-
 
       {/* Business Sectors Section */}
       <div style={{
@@ -748,7 +437,7 @@ export default function WuHome() {
                 marginBottom: "1rem",
                 fontSize: "clamp(2rem, 4vw, 3rem)"
               }}>
-                {t('website.business.sectors.title', 'Cầu Nối Các Lĩnh Vực Kinh Doanh')}
+                {t('website.business.sectors.title', businessSectorsTitle)}
               </h2>
               <Paragraph style={{
                 fontSize: "18px",
@@ -756,7 +445,7 @@ export default function WuHome() {
                 maxWidth: "600px",
                 margin: "0 auto"
               }}>
-                {t('website.business.sectors.subtitle', 'Kết nối đa ngành, đa lĩnh vực, đa dịch vụ trên một nền tảng')}
+                {t('website.business.sectors.subtitle', businessSectorsSubtitle)}
               </Paragraph>
             </div>
             <Row gutter={[32, 32]} justify="center">
@@ -833,84 +522,6 @@ export default function WuHome() {
         </Row>
       </div>
 
-      {/* Testimonials */}
-      <div style={{ 
-        padding: "100px 24px", 
-        background: "var(--bg-secondary)",
-        position: "relative",
-        ...belowFoldSectionStyle,
-      }}>
-        <Row justify="center">
-          <Col xs={24} lg={20}>
-            <div style={{ textAlign: "center", marginBottom: "60px" }}>
-              <h2 style={{ 
-                color: "var(--text-primary)", 
-                marginBottom: "1rem",
-                fontSize: "clamp(2rem, 4vw, 3rem)"
-              }}>
-                {t('website.testimonials.title', 'Khách Hàng Nói Gì Về Chúng Tôi')}
-              </h2>
-              <Paragraph style={{ 
-                fontSize: "18px", 
-                color: "var(--text-secondary)" 
-              }}>
-                {t('website.testimonials.subtitle', 'Hàng nghìn khách hàng tin tưởng và hài lòng với dịch vụ')}
-              </Paragraph>
-            </div>
-            
-            <Row gutter={[32, 32]}>
-              {testimonials.map((testimonial, index) => (
-                <Col xs={24} lg={8} key={index}>
-                  <Card
-                    style={{
-                      borderRadius: "20px",
-                      border: "1px solid var(--card-border)",
-                      height: "100%",
-                      boxShadow: "var(--card-shadow)",
-                      background: "var(--card-bg)",
-                      transition: "all 0.3s ease"
-                    }}
-                    styles={{ body: { padding: "30px" } }}
-                    hoverable
-                  >
-                    <div style={{ textAlign: "center", marginBottom: "20px" }}>
-                      <Avatar src={testimonial.avatar} size={80} style={{ 
-                        marginBottom: "15px",
-                        border: "3px solid var(--brand-primary)"
-                      }} />
-                      <Title level={4} style={{ 
-                        marginBottom: "5px", 
-                        color: "var(--text-primary)",
-                        fontSize: "1.1rem"
-                      }}>
-                        {testimonial.name}
-                      </Title>
-                      <Text style={{ color: "var(--text-secondary)" }}>
-                        {testimonial.company}
-                      </Text>
-                    </div>
-                    <div style={{ textAlign: "center", marginBottom: "15px" }}>
-                      <Rate disabled defaultValue={testimonial.rating} style={{ 
-                        fontSize: "16px",
-                        color: "#faad14"
-                      }} />
-                    </div>
-                    <Paragraph style={{ 
-                      fontStyle: "italic", 
-                      color: "var(--text-secondary)", 
-                      fontSize: "16px",
-                      lineHeight: "1.6",
-                      textAlign: "center"
-                    }}>
-                      "{testimonial.content}"
-                    </Paragraph>
-                  </Card>
-                </Col>
-              ))}
-            </Row>
-          </Col>
-        </Row>
-      </div>
 		</WebsiteLayout>
 	);
 }
