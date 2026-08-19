@@ -31,19 +31,19 @@ type AuthRateLimitConfig struct {
 type AIConfig struct {
 	LlamaModelPath        string
 	LlamaNativeEnabled    bool
-	LlamaPreloadOnStartup   bool
-	LlamaGPULayers          int32
-	LlamaUseMlock           bool
-	LlamaContextWindow      uint32
-	LlamaMaxTokens          uint32
-	LlamaMaxPromptChars     int
-	LlamaThreads            int32
-	LlamaBatchSize          uint32
-	LlamaUbatchSize         uint32
-	LlamaUseMmap            bool
-	ContextDir              string
-	MenuMasterPromptPath    string
-	CodeMasterPromptPath    string
+	LlamaPreloadOnStartup bool
+	LlamaGPULayers        int32
+	LlamaUseMlock         bool
+	LlamaContextWindow    uint32
+	LlamaMaxTokens        uint32
+	LlamaMaxPromptChars   int
+	LlamaThreads          int32
+	LlamaBatchSize        uint32
+	LlamaUbatchSize       uint32
+	LlamaUseMmap          bool
+	ContextDir            string
+	MenuMasterPromptPath  string
+	CodeMasterPromptPath  string
 }
 
 type GoogleIndexConfig struct {
@@ -52,34 +52,40 @@ type GoogleIndexConfig struct {
 	WorkDir            string
 }
 
+type FacebookConfig struct {
+	AppID     string
+	AppSecret string
+}
+
 type AppConfig struct {
-	Server          ServerConfig
-	Socket          SocketConfig
-	DataDir         string
-	NativeDataDir   string
-	PebbleRoot      string
-	PebbleLegacy    string // optional monolithic csm.kv for read fallback during migration
-	SearchDBPath    string
-	SearchDBDir     string
-	VectorStoreDir  string
-	RocksDBRoot     string // legacy source for one-time migrate only
-	RocksDBBackup   string
-	LuceneIndexRoot string
-	JWTSecret       string
-	Redis           RedisConfig
-	AuthRateLimit   AuthRateLimitConfig
-	AI              AIConfig
+	Server               ServerConfig
+	Socket               SocketConfig
+	DataDir              string
+	NativeDataDir        string
+	PebbleRoot           string
+	PebbleLegacy         string // optional monolithic csm.kv for read fallback during migration
+	SearchDBPath         string
+	SearchDBDir          string
+	VectorStoreDir       string
+	RocksDBRoot          string // legacy source for one-time migrate only
+	RocksDBBackup        string
+	LuceneIndexRoot      string
+	JWTSecret            string
+	Redis                RedisConfig
+	AuthRateLimit        AuthRateLimitConfig
+	AI                   AIConfig
 	GoogleIndex          GoogleIndexConfig
+	Facebook             FacebookConfig
 	StartupReindex       bool
 	StartupReindexTables []string
 	// EqIndexMode: "pebble" (SSD, low RAM) or "memory" (fast, high RAM).
 	EqIndexMode string
 	EqIndexRoot string
 	// Pebble tuning — shared cache keeps RAM bounded when many tables are open.
-	PebbleCacheMB        int
-	PebbleMemTableMB     int
+	PebbleCacheMB         int
+	PebbleMemTableMB      int
 	PebbleIndexMemTableMB int
-	VectorRecordsEnabled bool
+	VectorRecordsEnabled  bool
 }
 
 func LoadFromEnv() AppConfig {
@@ -126,16 +132,16 @@ func LoadFromEnv() AppConfig {
 			),
 			LlamaNativeEnabled:    envFlagTrue("AI_LOCAL_LLAMA_NATIVE_ENABLED", true),
 			LlamaPreloadOnStartup: envFlagTrue("AI_LOCAL_LLAMA_PRELOAD_ON_STARTUP", false),
-			LlamaGPULayers:      int32(envInt("AI_LOCAL_LLAMA_GPU_LAYERS", 0)),
-			LlamaUseMlock:       envFlagTrue("AI_LOCAL_LLAMA_USE_MLOCK", false),
-			LlamaContextWindow:  envUint32("AI_LOCAL_LLAMA_CONTEXT_WINDOW", 8192),
-			LlamaMaxTokens:      envUint32("AI_LOCAL_LLAMA_MAX_TOKENS", 768),
-			LlamaMaxPromptChars: envInt("AI_LOCAL_LLAMA_MAX_PROMPT_CHARS", 32_000),
-			LlamaThreads:        int32(envInt("AI_LOCAL_LLAMA_THREADS", 4)),
-			LlamaBatchSize:      envUint32("AI_LOCAL_LLAMA_BATCH_SIZE", 512),
-			LlamaUbatchSize:     envUint32("AI_LOCAL_LLAMA_UBATCH_SIZE", 64),
-			LlamaUseMmap:        envFlagTrue("AI_LOCAL_LLAMA_USE_MMAP", true),
-			ContextDir:          envPath("AI_CONTEXT_DIR", filepath.Join(dataDir, "ai_local")),
+			LlamaGPULayers:        int32(envInt("AI_LOCAL_LLAMA_GPU_LAYERS", 0)),
+			LlamaUseMlock:         envFlagTrue("AI_LOCAL_LLAMA_USE_MLOCK", false),
+			LlamaContextWindow:    envUint32("AI_LOCAL_LLAMA_CONTEXT_WINDOW", 8192),
+			LlamaMaxTokens:        envUint32("AI_LOCAL_LLAMA_MAX_TOKENS", 768),
+			LlamaMaxPromptChars:   envInt("AI_LOCAL_LLAMA_MAX_PROMPT_CHARS", 32_000),
+			LlamaThreads:          int32(envInt("AI_LOCAL_LLAMA_THREADS", 4)),
+			LlamaBatchSize:        envUint32("AI_LOCAL_LLAMA_BATCH_SIZE", 512),
+			LlamaUbatchSize:       envUint32("AI_LOCAL_LLAMA_UBATCH_SIZE", 64),
+			LlamaUseMmap:          envFlagTrue("AI_LOCAL_LLAMA_USE_MMAP", true),
+			ContextDir:            envPath("AI_CONTEXT_DIR", filepath.Join(dataDir, "ai_local")),
 			MenuMasterPromptPath: envPath(
 				"AI_MENU_MASTER_PROMPT_PATH",
 				filepath.Join(dataDir, "ai_local", "ai_menu_master_prompt.md"),
@@ -153,14 +159,18 @@ func LoadFromEnv() AppConfig {
 			DailyLimit: int32(envInt("GOOGLE_INDEX_DAILY_LIMIT", 200)),
 			WorkDir:    envPath("GOOGLE_INDEX_WORK_DIR", filepath.Join(dataDir, "google_index")),
 		},
-		StartupReindex:       envFlagTrue("CSM_STARTUP_REINDEX", true),
-		StartupReindexTables: envStringList("CSM_STARTUP_REINDEX_TABLES", []string{"csm/csm_accounts", "csm/csm_group_members", "csm/sys_autos"}),
-		EqIndexMode:          envString("CSM_EQ_INDEX_MODE", defaultEqIndexMode()),
-		EqIndexRoot:          envPath("CSM_EQ_INDEX_ROOT", filepath.Join(nativeDir, "eq_index")),
-		PebbleCacheMB:        envInt("CSM_PEBBLE_CACHE_MB", defaultPebbleCacheMB()),
-		PebbleMemTableMB:     envInt("CSM_PEBBLE_MEMTABLE_MB", defaultPebbleMemTableMB()),
+		Facebook: FacebookConfig{
+			AppID:     envString("FACEBOOK_APP_ID", ""),
+			AppSecret: envString("FACEBOOK_APP_SECRET", ""),
+		},
+		StartupReindex:        envFlagTrue("CSM_STARTUP_REINDEX", true),
+		StartupReindexTables:  envStringList("CSM_STARTUP_REINDEX_TABLES", []string{"csm/csm_accounts", "csm/csm_group_members", "csm/sys_autos"}),
+		EqIndexMode:           envString("CSM_EQ_INDEX_MODE", defaultEqIndexMode()),
+		EqIndexRoot:           envPath("CSM_EQ_INDEX_ROOT", filepath.Join(nativeDir, "eq_index")),
+		PebbleCacheMB:         envInt("CSM_PEBBLE_CACHE_MB", defaultPebbleCacheMB()),
+		PebbleMemTableMB:      envInt("CSM_PEBBLE_MEMTABLE_MB", defaultPebbleMemTableMB()),
 		PebbleIndexMemTableMB: envInt("CSM_PEBBLE_INDEX_MEMTABLE_MB", defaultPebbleIndexMemTableMB()),
-		VectorRecordsEnabled: envFlagTrue("CSM_VECTOR_RECORDS_ENABLED", defaultVectorRecordsEnabled()),
+		VectorRecordsEnabled:  envFlagTrue("CSM_VECTOR_RECORDS_ENABLED", defaultVectorRecordsEnabled()),
 	}
 	ApplyAIRuntimeAutoTune(&cfg)
 	return cfg

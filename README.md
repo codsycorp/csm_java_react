@@ -93,13 +93,14 @@ export SERVER_HOST="root@your-server-ip"
 ./deploy.sh
 
 # Cấu hình AccessKey
-AccessKeyId	LTAI5t92exgN59SrcJXqQViD
-AccessKeySecret	LSwHiGKNLkFgJUTjAAUZRoaSss1JCD
+# ⚠️ KHÔNG commit AccessKey thật — điền giá trị từ Alibaba Cloud Console
+AccessKeyId	<YOUR_ACCESS_KEY_ID>
+AccessKeySecret	<YOUR_ACCESS_KEY_SECRET>
 Default Region Id [cn-hongkong]	cn-hongkong
 
 endpoint=oss-cn-hongkong.aliyuncs.com
-accessKeyID=LTAI5t92exgN59SrcJXqQViD
-accessKeySecret=LSwHiGKNLkFgJUTjAAUZRoaSss1JCD
+accessKeyID=<YOUR_ACCESS_KEY_ID>
+accessKeySecret=<YOUR_ACCESS_KEY_SECRET>
 region=cn-hongkong
 
 
@@ -170,8 +171,8 @@ HTTP_METHOD="POST"
 CONTENT_TYPE="application/json"
 DATE=$(date -u "+%a, %d %b %Y %H:%M:%S GMT")
 RESOURCE="/2023-03-30/functions/leanh-fc-javabackend/invocations"
-ACCESS_KEY_ID="LTAI5t92exgN59SrcJXqQViD"  # Thay thế bằng Access Key ID thực tế
-ACCESS_KEY_SECRET="LSwHiGKNLkFgJUTjAAUZRoaSss1JCD"  # Thay thế bằng Access Key Secret thực tế
+ACCESS_KEY_ID="<YOUR_ACCESS_KEY_ID>"  # Thay thế bằng Access Key ID thực tế
+ACCESS_KEY_SECRET="<YOUR_ACCESS_KEY_SECRET>"  # Thay thế bằng Access Key Secret thực tế
 HOST="5185533208336278.cn-hongkong.fc.aliyuncs.com"
 # Lấy ngày hiện tại theo định dạng /YYYY/MM/DD
 CURRENT_DATE=$(date -u "+%Y/%m/%d")

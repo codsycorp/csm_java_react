@@ -127,6 +127,16 @@ func (n *llamaNativeBackend) complete(prompt string, maxTokens uint32) (string, 
 	)
 }
 
+func (n *llamaNativeBackend) tokenCount(text string) (int, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if err := n.ensureLoadedLocked(); err != nil {
+		return 0, err
+	}
+	tokens, err := n.ctx.Tokenize(text)
+	return len(tokens), err
+}
+
 func (n *llamaNativeBackend) stream(prompt string, maxTokens uint32, onToken func(string) error) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()

@@ -78,6 +78,13 @@ func (l *LlamaService) CompleteWithTokens(ctx context.Context, prompt string, ma
 	return CleanLocalModelOutput(text), nil
 }
 
+func (l *LlamaService) CountTokens(text string) (int, error) {
+	if !l.UsesNative() {
+		return 0, fmt.Errorf("%s: %s", LocalProviderUnavailableCode, l.statusHint())
+	}
+	return l.backend.tokenCount(text)
+}
+
 func (l *LlamaService) IsModelLoaded() bool {
 	return l.backend != nil && l.backend.isLoaded()
 }

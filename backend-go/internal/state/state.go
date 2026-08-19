@@ -51,7 +51,7 @@ func NewAppState(cfg config.AppConfig) (*AppState, error) {
 	httpClient := &http.Client{Timeout: 900 * time.Second}
 	googleIndex := services.NewGoogleIndexService(cfg, httpClient)
 	llama := services.NewLlamaService(cfg)
-	aiSeo := services.NewAiSeoService(cfg, llama)
+	aiSeo := services.NewAiSeoService(cfg, llama, rm)
 	chat := services.NewChatService(rm)
 	socketHub := socket.NewHub()
 

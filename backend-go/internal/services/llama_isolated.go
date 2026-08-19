@@ -35,6 +35,7 @@ type llamaWorkerResponse struct {
 	Done  bool   `json:"done,omitempty"`
 	Error string `json:"error,omitempty"`
 	Ready bool   `json:"ready,omitempty"`
+	Count int    `json:"count,omitempty"`
 }
 
 type llamaIsolatedBackend struct {
@@ -172,6 +173,26 @@ func (b *llamaIsolatedBackend) complete(prompt string, maxTokens uint32) (string
 		return "", errors.New("llama worker complete failed")
 	}
 	return resp.Text, nil
+}
+
+func (b *llamaIsolatedBackend) tokenCount(text string) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if err := b.ensureWorkerLocked(); err != nil {
+		return 0, err
+	}
+	id := b.seq.Add(1)
+	if err := b.writeRequest(llamaWorkerRequest{ID: id, Op: "tokenize", Prompt: text}); err != nil {
+		return 0, err
+	}
+	response, err := b.readResponseFor(id, llamaWorkerRequestTimeout, nil)
+	if err != nil {
+		return 0, err
+	}
+	if !response.OK {
+		return 0, errors.New(response.Error)
+	}
+	return response.Count, nil
 }
 
 func (b *llamaIsolatedBackend) stream(prompt string, maxTokens uint32, onToken func(string) error) error {

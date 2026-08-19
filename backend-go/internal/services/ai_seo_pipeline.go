@@ -18,10 +18,10 @@ var (
 	seoVietnameseDiacriticsRe = regexp.MustCompile(
 		`[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđÀÁẠẢÃÂẦẤẬẨẪĂẰẮẶẲẴÈÉẸẺẼÊỀẾỆỂỄÌÍỊỈĨÒÓỌỎÕÔỒỐỘỔỖƠỜỚỢỞỠÙÚỤỦŨƯỪỨỰỬỮỲÝỴỶỸĐ]`,
 	)
-	seoAntiAIPersonas  = []string{"investor", "family", "local_resident", "business_owner", "storyteller"}
-	seoAntiAIPatterns  = []string{"investment_analysis", "family_story", "step_by_step_guide", "quick_tips", "landing_page"}
-	seoAntiAISelling   = []string{"title_explicit", "content_subtle", "content_implicit"}
-	seoRequiredFields  = []string{
+	seoAntiAIPersonas = []string{"investor", "family", "local_resident", "business_owner", "storyteller"}
+	seoAntiAIPatterns = []string{"investment_analysis", "family_story", "step_by_step_guide", "quick_tips", "landing_page"}
+	seoAntiAISelling  = []string{"title_explicit", "content_subtle", "content_implicit"}
+	seoRequiredFields = []string{
 		"title", "title_en", "title_zh",
 		"description", "description_en", "description_zh",
 		"content", "content_en", "content_zh",
@@ -39,12 +39,12 @@ var (
 )
 
 type seoCreativeParams struct {
-	PersonaKey      string
-	ContentPattern  string
-	SellingIntent   string
-	Hook            string
-	Angle           string
-	Tone            string
+	PersonaKey     string
+	ContentPattern string
+	SellingIntent  string
+	Hook           string
+	Angle          string
+	Tone           string
 }
 
 // EffectiveSeoArticleMaxTokens reads AI_SEO_ARTICLE_MAX_TOKENS (Java resolveSeoArticleOutputTokens).
@@ -122,7 +122,7 @@ func (s *AiSeoService) runAntiAiOneShot(ctx context.Context, seoContext map[stri
 	}
 	prompt = PrepareLocalProviderPrompt(prompt, EffectiveSeoPromptMaxChars(s.cfg))
 
-	raw, err := s.llama.CompleteWithTokens(ctx, prompt, EffectiveSeoArticleMaxTokens(s.cfg))
+	raw, err := s.completeSEO(ctx, "article_vi", prompt, EffectiveSeoArticleMaxTokens(s.cfg))
 	if err != nil {
 		return seoErrorResponse(fmt.Sprintf("Lỗi tạo bài SEO: %v", err), "")
 	}
@@ -136,7 +136,7 @@ func (s *AiSeoService) runAntiAiOneShot(ctx context.Context, seoContext map[stri
 [RETRY] JSON lần trước thiếu hoặc có dấu ... — viết LẠI đủ field tiếng Việt.
 Cấm dùng ... hoặc bỏ trống field. content HTML ~350-500 từ.`
 		retryPrompt = PrepareLocalProviderPrompt(retryPrompt, EffectiveSeoPromptMaxChars(s.cfg))
-		retryRaw, retryErr := s.llama.CompleteWithTokens(ctx, retryPrompt, EffectiveSeoArticleMaxTokens(s.cfg))
+		retryRaw, retryErr := s.completeSEO(ctx, "article_vi_retry", retryPrompt, EffectiveSeoArticleMaxTokens(s.cfg))
 		if retryErr == nil {
 			retryParsed := parseSeoArticleMap(retryRaw)
 			if scoreFilledSeoFields(retryParsed) > scoreFilledSeoFields(merged) {
@@ -161,14 +161,21 @@ Cấm dùng ... hoặc bỏ trống field. content HTML ~350-500 từ.`
 		fillDerivedLocaleMetaFields(merged)
 	}
 
-	if hasCompleteTrilingualSeo(merged) || hasMinimalTrilingualSeo(merged) {
-		normalizeSeoFields(merged)
+	normalizeSeoFields(merged)
+
+	// Independent verifier gate per blueprint section 9.
+	if s.verifier != nil {
+		v := s.verifier.Evaluate(merged)
+		s.recordVerification(ctx, "final_coverage_gate", v)
+		if !v.Passed {
+			return seoIncompleteResponse(merged)
+		}
+	}
+
+	if hasCompleteSeoArticleContract(merged) {
 		return seoSuccessResponse(merged)
 	}
-	return seoErrorResponse(
-		"Model local chưa dịch đủ EN/ZH sau bài tiếng Việt. Thử lại hoặc tăng AI_SEO_ARTICLE_MAX_TOKENS.",
-		"SEO_GENERATION_FAILED",
-	)
+	return seoIncompleteResponse(merged)
 }
 
 func (s *AiSeoService) finalizePromptSeoArticle(ctx context.Context, raw string) *model.StandardResponse {
@@ -181,11 +188,11 @@ func (s *AiSeoService) finalizePromptSeoArticle(ctx context.Context, raw string)
 		fillDerivedLocaleMetaFields(merged)
 	}
 
-	if hasRecoverableSeoContent(merged) && (hasMinimalTrilingualSeo(merged) || hasCompleteTrilingualSeo(merged)) {
-		normalizeSeoFields(merged)
+	normalizeSeoFields(merged)
+	if hasCompleteSeoArticleContract(merged) {
 		return seoSuccessResponse(merged)
 	}
-	return populateSeoResponse(raw)
+	return seoIncompleteResponse(merged)
 }
 
 func (s *AiSeoService) ensureTrilingualLocalesForViFirst(ctx context.Context, payload map[string]any) {
@@ -209,7 +216,7 @@ func (s *AiSeoService) ensureTrilingualLocalesForViFirst(ctx context.Context, pa
 		return
 	}
 	clearStaleLocaleCopies(payload)
-	raw, err := s.llama.CompleteWithTokens(ctx,
+	raw, err := s.completeSEO(ctx, "translate_locales_fallback",
 		PrepareLocalProviderPrompt(buildMinimalLocaleTranslatePrompt(payload), EffectiveSeoPromptMaxChars(s.cfg)),
 		EffectiveSeoLocaleTranslateMaxTokens(s.cfg),
 	)
@@ -226,7 +233,7 @@ func (s *AiSeoService) ensureTrilingualLocalesWithRetry(ctx context.Context, pay
 	if !needsLocaleTranslate(payload) {
 		return
 	}
-	raw, err := s.llama.CompleteWithTokens(ctx,
+	raw, err := s.completeSEO(ctx, "translate_locales_retry",
 		PrepareLocalProviderPrompt(buildMinimalLocaleTranslatePrompt(payload), EffectiveSeoPromptMaxChars(s.cfg)),
 		EffectiveSeoLocaleTranslateMaxTokens(s.cfg),
 	)
@@ -245,7 +252,7 @@ func (s *AiSeoService) translateSingleLocale(ctx context.Context, payload map[st
 	} else {
 		prompt = buildSingleLocaleTranslatePrompt(payload, lang)
 	}
-	raw, err := s.llama.CompleteWithTokens(ctx,
+	raw, err := s.completeSEO(ctx, "translate_"+lang,
 		PrepareLocalProviderPrompt(prompt, EffectiveSeoPromptMaxChars(s.cfg)),
 		EffectiveSeoLocaleTranslateMaxTokens(s.cfg),
 	)
@@ -543,6 +550,54 @@ func hasCompleteTrilingualSeo(data map[string]any) bool {
 	return true
 }
 
+func hasCompleteSeoArticleContract(data map[string]any) bool {
+	if !hasCompleteTrilingualSeo(data) {
+		return false
+	}
+	for _, field := range []string{
+		"attributes_title", "attributes_title_en", "attributes_title_zh",
+		"attributes_description", "attributes_description_en", "attributes_description_zh",
+		"attributes_keywords", "attributes_keywords_en", "attributes_keywords_zh",
+	} {
+		if isBlankSeoValue(data[field]) {
+			return false
+		}
+	}
+	return true
+}
+
+func missingSeoArticleFields(data map[string]any) []string {
+	fields := append([]string{}, seoRequiredFields...)
+	fields = append(fields,
+		"attributes_title", "attributes_title_en", "attributes_title_zh",
+		"attributes_description", "attributes_description_en", "attributes_description_zh",
+		"attributes_keywords", "attributes_keywords_en", "attributes_keywords_zh",
+	)
+	missing := make([]string, 0)
+	for _, field := range fields {
+		if isBlankSeoValue(data[field]) {
+			missing = append(missing, field)
+		}
+	}
+	return missing
+}
+
+func seoIncompleteResponse(data map[string]any) *model.StandardResponse {
+	requirements, missingRequirements := seoRequirementCoverage(data)
+	response := model.NewResponse()
+	response.Set("code", 200)
+	response.Set("success", false)
+	response.Set("status", "INCOMPLETE")
+	response.Set("errorCode", "REQUIREMENT_COVERAGE_FAILED")
+	response.Set("complete", false)
+	response.Set("requirements", requirements)
+	response.Set("missingRequirements", missingRequirements)
+	response.Set("missingFields", missingSeoArticleFields(data))
+	response.Set("retryable", true)
+	response.Set("message", "Bài SEO chưa đủ contract VI/EN/ZH và metadata bắt buộc.")
+	return response
+}
+
 func needsLocaleTranslate(data map[string]any) bool {
 	return !hasMinimalTrilingualSeo(data) || isCoreLocaleCopyViolation(data)
 }
@@ -648,13 +703,37 @@ func truncateForLocaleTranslate(text string) string {
 }
 
 func seoSuccessResponse(data map[string]any) *model.StandardResponse {
+	requirements, _ := seoRequirementCoverage(data)
 	r := model.NewResponse()
 	r.Set("code", 200)
 	r.Set("success", true)
+	r.Set("complete", true)
+	r.Set("requirements", requirements)
 	r.Set("data", data)
 	r.Set("provider", "local_provider")
 	r.Set("message", "Thành công")
 	return r
+}
+
+func seoRequirementCoverage(data map[string]any) ([]map[string]any, []string) {
+	checks := []struct {
+		id     string
+		passed bool
+	}{
+		{id: "REQ-SEO-VI", passed: hasRecoverableSeoContent(data)},
+		{id: "REQ-SEO-EN", passed: !needsSingleLocaleTranslate(data, "en")},
+		{id: "REQ-SEO-ZH", passed: !needsSingleLocaleTranslate(data, "zh")},
+		{id: "REQ-SEO-META", passed: len(missingSeoArticleFields(data)) == 0},
+	}
+	requirements := make([]map[string]any, 0, len(checks))
+	missing := make([]string, 0)
+	for _, check := range checks {
+		requirements = append(requirements, map[string]any{"id": check.id, "passed": check.passed})
+		if !check.passed {
+			missing = append(missing, check.id)
+		}
+	}
+	return requirements, missing
 }
 
 func seoErrorResponse(message, errorCode string) *model.StandardResponse {

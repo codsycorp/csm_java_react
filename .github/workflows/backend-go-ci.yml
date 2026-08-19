@@ -1,13 +1,36 @@
-name: backend-go CI (manual only)
+name: backend-go CI
 
 on:
+  push:
+    branches: [main, master]
+    paths: ['backend-go/**', '.github/workflows/backend-go-ci.yml']
+  pull_request:
+    paths: ['backend-go/**']
   workflow_dispatch:
 
 jobs:
-  notice:
+  test:
+    name: vet + build + test
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend-go
     steps:
-      - name: Manual deploy mode
-        run: |
-          echo "Automatic build/deploy is disabled."
-          echo "Build artifacts manually via backend-go/docker-build.sh and deploy by hand."
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: backend-go/go.sum
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test
+        run: go test ./...

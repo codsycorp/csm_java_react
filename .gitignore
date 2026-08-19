@@ -54,6 +54,7 @@ logs/
 .env.production
 .env.test
 config.env
+config.*.env
 *.pem
 *.key
 *.crt
@@ -103,6 +104,7 @@ backend/src/main/resources/secrets/
 
 # Temporary files
 *.tmp
+*.bak
 *.temp
 *.swp
 *.swo

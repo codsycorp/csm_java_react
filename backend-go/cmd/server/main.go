@@ -14,6 +14,7 @@ import (
 
 	"csm_server/backend-go/internal/api"
 	"csm_server/backend-go/internal/config"
+	"csm_server/backend-go/internal/metrics"
 	"csm_server/backend-go/internal/services"
 	"csm_server/backend-go/internal/state"
 )
@@ -54,7 +55,12 @@ func main() {
 		AllowCredentials: true,
 		MaxAge:           3600,
 	}))
+	r.Use(metrics.Middleware)
 	r.Use(api.AuthMiddleware(st))
+
+	r.Get("/metrics", func(w http.ResponseWriter, r *http.Request) {
+		metrics.Handler().ServeHTTP(w, r)
+	})
 
 	r.Get("/api/monitoring/health", func(w http.ResponseWriter, r *http.Request) {
 		api.MonitoringHealth().Write(w)

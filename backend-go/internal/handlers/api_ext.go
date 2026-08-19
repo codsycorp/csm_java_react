@@ -14,6 +14,7 @@ import (
 
 	"csm_server/backend-go/internal/config"
 	"csm_server/backend-go/internal/model"
+	"csm_server/backend-go/internal/security"
 	"csm_server/backend-go/internal/services"
 )
 
@@ -123,7 +124,11 @@ func (h *ApiExtHandler) HandleExecuteJS(_ map[string]any) *model.StandardRespons
 	return r
 }
 
-func (h *ApiExtHandler) HandleAiGenerateSeoContent(params map[string]any) *model.StandardResponse {
+func (h *ApiExtHandler) HandleAiGenerateSeoContent(params map[string]any, auth *security.AuthUser) *model.StandardResponse {
+	if auth == nil {
+		return model.ErrorResponse(http.StatusUnauthorized, "authentication required")
+	}
+	params["appId"] = strings.TrimSpace(auth.AppID)
 	ctx, cancel := services.SeoRequestContext()
 	defer cancel()
 	return h.aiSeo.Generate(ctx, params)

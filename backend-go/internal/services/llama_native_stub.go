@@ -4,6 +4,7 @@ package services
 
 import (
 	"errors"
+	"fmt"
 
 	"csm_server/backend-go/internal/config"
 )
@@ -22,6 +23,10 @@ func (n *llamaNativeBackend) ready() bool {
 
 func (n *llamaNativeBackend) complete(_ string, _ uint32) (string, error) {
 	return "", errNativeUnavailable
+}
+
+func (n *llamaNativeBackend) tokenCount(_ string) (int, error) {
+	return 0, fmt.Errorf("llama.cpp native not built")
 }
 
 func (n *llamaNativeBackend) stream(_ string, _ uint32, _ func(string) error) error {

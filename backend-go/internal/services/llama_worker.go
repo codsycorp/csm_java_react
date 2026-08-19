@@ -56,6 +56,13 @@ func RunLlamaWorker(cfg config.AppConfig) {
 				continue
 			}
 			writeLine(llamaWorkerResponse{ID: req.ID, OK: true, Text: text})
+		case "tokenize":
+			count, err := backend.tokenCount(req.Prompt)
+			if err != nil {
+				writeLine(llamaWorkerResponse{ID: req.ID, OK: false, Error: err.Error()})
+				continue
+			}
+			writeLine(llamaWorkerResponse{ID: req.ID, OK: true, Count: count})
 		case "stream":
 			err := backend.stream(req.Prompt, req.MaxTokens, func(tok string) error {
 				writeLine(llamaWorkerResponse{ID: req.ID, Token: tok})

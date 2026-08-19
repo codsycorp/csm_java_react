@@ -31,9 +31,10 @@ func TestAdminCreateSubUserGeneratesAppToken(t *testing.T) {
 		"app_id":  "myapp",
 		"command": "create",
 		"obj_update": map[string]any{
-			"id":               "sub-1",
-			"login_identifier": "sub1",
-			"pass":             "rawpass123",
+			"id":                  "sub-1",
+			"login_identifier":    "sub1",
+			"pass":                "rawpass123",
+			"account_expiry_days": 30,
 		},
 	}
 	result := h.handleUpdateOperation(out, params, "csm", "csm_group_members", model.SearchFilter{}, access)
@@ -127,9 +128,10 @@ func TestAdminCreateSubUserIgnoresClientAppID(t *testing.T) {
 		"app_id":  "csm", // request namespace for csm_group_members
 		"command": "create",
 		"obj_update": map[string]any{
-			"id":               "sub-9",
-			"login_identifier": "sub9",
-			"app_id":           "csm", // client-supplied (wrong) app_id must be ignored
+			"id":                  "sub-9",
+			"login_identifier":    "sub9",
+			"app_id":              "csm", // client-supplied (wrong) app_id must be ignored
+			"account_expiry_days": 30,
 		},
 	}
 	result := h.handleUpdateOperation(out, params, "csm", "csm_group_members", model.SearchFilter{}, access)
@@ -170,9 +172,10 @@ func TestAdminCreateSubUserKeepsClientSuppliedAppToken(t *testing.T) {
 		"app_id":  "myapp",
 		"command": "create",
 		"obj_update": map[string]any{
-			"id":               "sub-2",
-			"login_identifier": "sub2",
-			"app_token":        supplied,
+			"id":                  "sub-2",
+			"login_identifier":    "sub2",
+			"app_token":           supplied,
+			"account_expiry_days": 30,
 		},
 	}
 	result := h.handleUpdateOperation(out, params, "csm", "csm_group_members", model.SearchFilter{}, access)

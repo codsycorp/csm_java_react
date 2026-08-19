@@ -2458,17 +2458,18 @@ func fillListingFromPagination(
 	pageSize int,
 	lang string,
 ) {
-	res := rm.FilterFirstPageFast(route.AppID, route.TblServiceDetail, filter, pageSize)
-	rows := rowsFrom(res)
-	pageRows := make([]any, 0, len(rows))
-	for _, r := range rows {
-		pageRows = append(pageRows, mapDetailLite(rm, r, lang))
+	allRows := rowsFrom(rm.Filter(route.AppID, route.TblServiceDetail, filter))
+	slices.SortFunc(allRows, func(a, b map[string]any) int {
+		return compareRelatedPostRowsDesc(a, b)
+	})
+	totalCount := len(allRows)
+	endIndex := pageSize
+	if endIndex > totalCount {
+		endIndex = totalCount
 	}
-	totalCount := len(pageRows)
-	if raw := strings.TrimSpace(recordStr(res, "totalCount")); raw != "" {
-		if v, err := strconv.Atoi(raw); err == nil && v >= 0 {
-			totalCount = v
-		}
+	pageRows := make([]any, 0, endIndex)
+	for _, r := range allRows[:endIndex] {
+		pageRows = append(pageRows, mapDetailLite(rm, r, lang))
 	}
 	out["serviceDetailList"] = pageRows
 	out["totalCount"] = totalCount
@@ -2476,10 +2477,9 @@ func fillListingFromPagination(
 	out["pageSize"] = pageSize
 	out["take"] = pageSize
 	out["paginationMode"] = "cursor"
-	next := strings.TrimSpace(recordStr(res, "nextCursor"))
-	if next != "" {
-		out["nextCursor"] = next
-		out["lastkey"] = next
+	if endIndex > 0 && endIndex < totalCount {
+		out["nextCursor"] = recordStr(allRows[endIndex-1], "id")
+		out["lastkey"] = recordStr(allRows[endIndex-1], "id")
 	}
 }
 

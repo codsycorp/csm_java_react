@@ -47,23 +47,7 @@ func classifyIntentContextFallback(req *CodeStreamRequest) LocalIntentClassifica
 	if mode := normalizeResponseMode(req.ResponseMode); mode != "" {
 		return intentFromExplicitMode(req, mode)
 	}
-	if shouldAnalyzeCurrentInfoQuestion(req.Message) {
-		return LocalIntentClassification{
-			Type: "QUESTION", Action: "ask", Confidence: 52,
-			NextStep: "answer_direct", ContextKind: "none", ResponseMode: "analyze",
-			Reasoning: "Fallback (LLM router offline): câu hỏi thông tin hiện tại cần analyze.",
-		}
-	}
 	ctx := strings.ToLower(strings.TrimSpace(req.ContextType))
-	if ctx == "" || ctx == "none" {
-		if shouldFallbackToAnalyzeQuestion(req.Message) {
-			return LocalIntentClassification{
-				Type: "QUESTION", Action: "ask", Confidence: 48,
-				NextStep: "answer_direct", ContextKind: "none", ResponseMode: "analyze",
-				Reasoning: "Fallback (LLM router offline): không có editor context + câu hỏi — trả lời trực tiếp (analyze).",
-			}
-		}
-	}
 	switch ctx {
 	case "menu_json":
 		return LocalIntentClassification{
@@ -72,6 +56,13 @@ func classifyIntentContextFallback(req *CodeStreamRequest) LocalIntentClassifica
 			Reasoning: "Fallback (LLM router offline): editor menu_json — mặc định edit.",
 		}
 	case "code", "frontend_code":
+		if shouldAnalyzeCurrentInfoQuestion(req.Message) {
+			return LocalIntentClassification{
+				Type: "QUESTION", Action: "ask", Confidence: 52,
+				NextStep: "answer_direct", ContextKind: "none", ResponseMode: "analyze",
+				Reasoning: "Fallback (LLM router offline): câu hỏi thông tin hiện tại cần analyze.",
+			}
+		}
 		return LocalIntentClassification{
 			Type: "EDIT_CODE", Action: "modify", Confidence: 45,
 			NextStep: "load_code_context", ContextKind: "code", ResponseMode: "edit",

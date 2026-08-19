@@ -31,7 +31,7 @@ func incrementalPlanMaxSteps() int {
 			return n
 		}
 	}
-	return 6
+	return 10
 }
 
 func incrementalPlanEnabled() bool {

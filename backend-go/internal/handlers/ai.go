@@ -15,28 +15,41 @@ import (
 	"strings"
 	"time"
 
+	"csm_server/backend-go/internal/ai/domain"
+	aistore "csm_server/backend-go/internal/ai/store"
 	"csm_server/backend-go/internal/config"
 	"csm_server/backend-go/internal/data"
 	"csm_server/backend-go/internal/model"
+	"csm_server/backend-go/internal/security"
 	"csm_server/backend-go/internal/services"
 )
 
 type AiHandler struct {
-	cfg   config.AppConfig
-	llama *services.LlamaService
-	rm    *data.RecordManager
+	cfg      config.AppConfig
+	llama    *services.LlamaService
+	rm       *data.RecordManager
+	platform *aistore.Store
 }
 
 func NewAiHandler(cfg config.AppConfig, llama *services.LlamaService, rm *data.RecordManager) *AiHandler {
-	return &AiHandler{cfg: cfg, llama: llama, rm: rm}
+	platform := aistore.New(rm)
+	return &AiHandler{cfg: cfg, llama: llama, rm: rm, platform: platform}
 }
 
 func (h *AiHandler) HandleAiLocal(path string, params map[string]any) *model.StandardResponse {
+	return h.HandleAiLocalAuth(path, params, nil)
+}
+
+func (h *AiHandler) HandleAiLocalAuth(path string, params map[string]any, auth *security.AuthUser) *model.StandardResponse {
 	r := model.NewResponse()
 	r.Set("code", 200)
 	r.Set("success", true)
 	ops := services.NewAiLocalOpsService(h.cfg)
 	switch {
+	case strings.HasSuffix(path, "/platform/agents"):
+		return h.handlePlatformAgents(params, auth)
+	case strings.HasSuffix(path, "/platform/run"):
+		return h.handlePlatformRun(params, auth)
 	case strings.HasSuffix(path, "/knowledge/rebuild-workspace"):
 		fullCode := paramBool(params, "fullCode", true)
 		result := services.RebuildWorkspaceIndexAPI(h.cfg, h.rm, fullCode)
@@ -108,6 +121,74 @@ func (h *AiHandler) HandleAiLocal(path string, params map[string]any) *model.Sta
 		r.Set("message", "AI local endpoint: "+path)
 	}
 	return r
+}
+
+func (h *AiHandler) handlePlatformAgents(params map[string]any, auth *security.AuthUser) *model.StandardResponse {
+	if auth == nil {
+		return model.ErrorResponse(401, "authentication required")
+	}
+	action := strings.ToLower(strings.TrimSpace(paramStr(params, "action")))
+	if action == "upsert" {
+		if !auth.Dev {
+			return model.ErrorResponse(403, "developer permission required")
+		}
+		agentID := strings.TrimSpace(paramStr(params, "agentId"))
+		if agentID == "" {
+			return model.ErrorResponse(400, "missing agentId")
+		}
+		version := paramInt(params, "version", 1)
+		definition := domain.AgentDefinition{
+			AgentID: agentID, TenantID: auth.AppID, Name: paramStr(params, "name"),
+			Version: version, Status: paramStr(params, "status"), Instructions: paramStr(params, "instructions"),
+			Skills: stringSliceParam(params["skills"]), AllowedTools: stringSliceParam(params["allowedTools"]),
+			PreferredMode: paramStr(params, "preferredMode"), CloudAllowed: paramBool(params, "cloudAllowed", false),
+			MaxSteps: paramInt(params, "maxSteps", 10),
+		}
+		if definition.Status == "" {
+			definition.Status = "draft"
+		}
+		if definition.PreferredMode == "" {
+			definition.PreferredMode = "local"
+		}
+		if err := h.platform.SaveAgent(definition); err != nil {
+			return model.ErrorResponse(400, err.Error())
+		}
+	}
+	response := model.NewResponse()
+	response.Set("success", true)
+	response.Set("agents", h.platform.ListAgents(auth.AppID))
+	return response
+}
+
+func (h *AiHandler) handlePlatformRun(params map[string]any, auth *security.AuthUser) *model.StandardResponse {
+	if auth == nil {
+		return model.ErrorResponse(401, "authentication required")
+	}
+	runID := strings.TrimSpace(paramStr(params, "runId"))
+	run, ok := h.platform.GetRunForTenant(strings.TrimSpace(auth.AppID), runID)
+	if !ok {
+		return model.ErrorResponse(404, "run not found")
+	}
+	response := model.NewResponse()
+	response.Set("success", true)
+	response.Set("run", run)
+	response.Set("steps", h.platform.ListStepsForRun(strings.TrimSpace(auth.AppID), runID))
+	return response
+}
+
+func stringSliceParam(value any) []string {
+	var out []string
+	switch items := value.(type) {
+	case []string:
+		return append(out, items...)
+	case []any:
+		for _, item := range items {
+			if text := strings.TrimSpace(fmt.Sprint(item)); text != "" {
+				out = append(out, text)
+			}
+		}
+	}
+	return out
 }
 
 func (h *AiHandler) handleAiLocalScanDryRun(params map[string]any) map[string]any {

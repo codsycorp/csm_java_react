@@ -141,7 +141,7 @@ func DispatchAPI(st *state.AppState, method, path string, params map[string]any,
 	case "/indexgoogle":
 		return st.ApiExtHandler.HandleIndexGoogle(params)
 	case "/ai-generate-seo-content":
-		return st.ApiExtHandler.HandleAiGenerateSeoContent(params)
+		return st.ApiExtHandler.HandleAiGenerateSeoContent(params, auth)
 	case "/apps-list":
 		return st.ApiExtHandler.HandleAppsList(params)
 	case "/traffic/analyze-frame":
@@ -203,7 +203,7 @@ func DispatchAPI(st *state.AppState, method, path string, params map[string]any,
 			return st.CrmHandler.HandleGetAds(params, auth)
 		}
 		if strings.HasPrefix(path, "/ai-local") {
-			return st.AiHandler.HandleAiLocal(path, params)
+			return st.AiHandler.HandleAiLocalAuth(path, params, auth)
 		}
 		if isAiDispatchPath(path) {
 			return st.AiHandler.HandleAiDispatch(path, params)

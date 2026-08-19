@@ -7,7 +7,7 @@ window.fnBililiteRange = function () {
     bililiteRange = function (el) {
       var ret;
       if (el.setSelectionRange) {
-        // Element is an input or textarea 
+        // Element is an input or textarea
         // note that some input elements do not allow selections
         try {
           el.selectionStart = el.selectionStart;
@@ -26,7 +26,7 @@ window.fnBililiteRange = function () {
       ret._bounds = [0, ret.length];
 
 
-      if (!(el[datakey])) { // we haven't processed this element yet	
+      if (!(el[datakey])) { // we haven't processed this element yet
         const data = createDataObject(el);
         startupHooks.forEach(hook => hook(el, ret, data));
       }
@@ -62,7 +62,7 @@ window.fnBililiteRange = function () {
       // have a data field with the text inserted, but that isn't enough to fully describe the change;
       // we need to know the old text (or at least its length)
       // and *where* the new text was inserted.
-      // So we enhance input events with that information. 
+      // So we enhance input events with that information.
       // the "newText" should always be the same as the 'data' field, if it is defined
       data.oldText = range.all();
       data.liveRanges = new Set();
@@ -180,7 +180,7 @@ window.fnBililiteRange = function () {
     // base class
     function Range() { }
     Range.prototype = {
-      // allow use of range[0] and range[1] for start and end of bounds 
+      // allow use of range[0] and range[1] for start and end of bounds
       get 0() {
         return this.bounds()[0];
       },
@@ -563,11 +563,11 @@ window.fnBililiteRange = function () {
     var END_TO_END = 2;
     var END_TO_START = 3;
     // from the Mozilla documentation, for range.compareBoundaryPoints(how, sourceRange)
-    // -1, 0, or 1, indicating whether the corresponding boundary-point of range is respectively before, equal to, or after the corresponding boundary-point of sourceRange. 
+    // -1, 0, or 1, indicating whether the corresponding boundary-point of range is respectively before, equal to, or after the corresponding boundary-point of sourceRange.
     // * Range.END_TO_END compares the end boundary-point of sourceRange to the end boundary-point of range.
     // * Range.END_TO_START compares the end boundary-point of sourceRange to the start boundary-point of range.
     // * Range.START_TO_END compares the start boundary-point of sourceRange to the end boundary-point of range.
-    // * Range.START_TO_START compares the start boundary-point of sourceRange to the start boundary-point of range. 
+    // * Range.START_TO_START compares the start boundary-point of sourceRange to the start boundary-point of range.
     function w3cstart(rng, constraint) {
       if (rng.compareBoundaryPoints(START_TO_START, constraint) <= 0) return 0; // at or before the beginning
       if (rng.compareBoundaryPoints(END_TO_START, constraint) >= 0) return constraint.toString().length;
@@ -617,7 +617,7 @@ window.fnBililiteRange = function () {
       const attr = `data-${prop}`;
       element.dispatchEvent(new CustomEvent(attr, { bubbles: true, detail: value }));
       try {
-        element.setAttribute(attr, value); // illegal attribute names will throw. Ignore it			
+        element.setAttribute(attr, value); // illegal attribute names will throw. Ignore it
       } finally { /* ignore */ }
     }
 
@@ -626,7 +626,7 @@ window.fnBililiteRange = function () {
         set(obj, prop, value) {
           obj[prop] = value;
           if (monitored.has(prop)) signalMonitor(prop, value, obj.sourceElement);
-          return true; // in strict mode, 'set' returns a success flag 
+          return true; // in strict mode, 'set' returns a success flag
         }
       });
     }
@@ -702,16 +702,16 @@ window.strEvent = `
   keyboardEvent[initMethod](
                      "keydown", // event type : keydown, keyup, keypress
                       true,     // bubbles
-                      true,     // cancelable  
-                      window,   // viewArg: should be window  
-                      false,    // ctrlKeyArg  
+                      true,     // cancelable
+                      window,   // viewArg: should be window
+                      false,    // ctrlKeyArg
                       false,    // altKeyArg
                       false,    // shiftKeyArg
                       false,    // metaKeyArg
-                      40,       // keyCodeArg : unsigned long the virtual key code, else 0  
+                      40,       // keyCodeArg : unsigned long the virtual key code, else 0
                       0         // charCodeArgs : unsigned long the Unicode character associated with the depressed key, else 0
   );
-  document.dispatchEvent(keyboardEvent); 
+  document.dispatchEvent(keyboardEvent);
   function fireKey(el,key)
   {
       if(document.createEventObject)
@@ -719,12 +719,12 @@ window.strEvent = `
           var eventObj = document.createEventObject();
           eventObj.keyCode = key;
           el.fireEvent("onkeydown", eventObj);
-          eventObj.keyCode = key;   
+          eventObj.keyCode = key;
       }else if(document.createEvent)
       {
           var eventObj = document.createEvent("Events");
           eventObj.initEvent("keydown", true, true);
-          eventObj.which = key; 
+          eventObj.which = key;
           eventObj.keyCode = key;
           el.dispatchEvent(eventObj);
       }
@@ -745,12 +745,12 @@ window.strEvent = `
       var clickEvent = document.createEvent ("MouseEvents");
       clickEvent.initEvent (eventType, true, true);
       node.dispatchEvent (clickEvent);
-  }  
+  }
   function simulateClick(obj) {
     var evt = document.createEvent("MouseEvents");
     evt.initMouseEvent("click", true, true, window,
       0, 0, 0, 0, 0, false, false, false, false, 0, null);
-    var canceled = !obj.dispatchEvent(evt);   
+    var canceled = !obj.dispatchEvent(evt);
   }
   /**
    * Gửi một sự kiện tùy chỉnh tới GA4.
@@ -838,7 +838,7 @@ function detectGA4MeasurementId() {
  */
 async function getAccurateClientId() {
     const measurementId = detectGA4MeasurementId();
-    
+
     return new Promise((resolve) => {
         let hasResolved = false;
 
@@ -943,7 +943,7 @@ async function getAccurateClientId() {
           }, sessionId, currentEngagementTime);
 
           window.location.href = targetUrl;
-          break; 
+          break;
         }
       }
 
@@ -1101,8 +1101,8 @@ window.strGoogleAds = window.strEvent + `
           const regex = /start=(\\d+)/; // \d+ tìm một hoặc nhiều chữ số
           const match = location.href.match(regex);
           var gTop=0;
-          if (match) 
-            cTop= match[1]; 
+          if (match)
+            cTop= match[1];
           if(timPT.length>0)
           {
             var idxPage=Array.from(caclinks).findIndex(el => el.href.toLowerCase().includes(link_check));
@@ -1164,7 +1164,7 @@ window.strGoogleAds = window.strEvent + `
   }
 `;
 // const {app} = require('electron');
-// const { ipcRenderer } = require('electron');   
+// const { ipcRenderer } = require('electron');
 // global.pingHost = () => {
 //   ipcRenderer.sendToHost('CHANNEL')
 // }
@@ -1355,6 +1355,58 @@ window.stopRuntimeDiagnosticsHeartbeat = function() {
 // -> Giới hạn runtime ở 59 phút để sử dụng hết thời gian mà tránh timeout
 window.MAX_PROXY_RUNTIME = 3540000; // 59 phút (3540000ms)
 window.PROXY_MAX_LIFETIME = 3600000; // 60 phút (3600000ms) - thời gian tối đa cho 1 proxy
+
+// ===== PROXY MANAGER IMPROVEMENTS =====
+window.proxyManager = {
+  // Phiên bản mới của fetchWithTimeout
+  safeFetch: async (resource, options = {}) => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 
+      options.timeout || window.PROXY_CONFIG.READ_TIMEOUT);
+    
+    try {
+      const response = await fetch(resource, {
+        ...options,
+        signal: controller.signal
+      });
+      clearTimeout(timeout);
+      return response;
+    } catch (error) {
+      clearTimeout(timeout);
+      console.error('Proxy request failed:', error);
+      throw error;
+    }
+  },
+  
+  // Giám sát thời gian sử dụng proxy
+  startMonitor: function() {
+    this.usageTimer = setInterval(() => {
+      const remaining = (window.PROXY_MAX_LIFETIME - (Date.now() - this.startTime)) / 60000;
+      console.log(`[Proxy] Thời gian còn lại: ${remaining.toFixed(1)} phút`);
+      
+      if (remaining < 5) { // Cảnh báo trước 5 phút
+        console.warn('[Proxy] Sắp hết thời gian, chuẩn bị đổi proxy');
+      }
+    }, 60000); // Kiểm tra mỗi phút
+  },
+  
+  // Hàm khởi tạo
+  init: function() {
+    this.startTime = Date.now();
+    this.startMonitor();
+    
+    // Tự động dọn dẹp khi đóng tab
+    window.addEventListener('beforeunload', () => {
+      clearInterval(this.usageTimer);
+      window.proxy_deactivate().catch(console.error);
+    });
+  }
+};
+
+// Khởi tạo proxy manager khi trang load
+window.addEventListener('DOMContentLoaded', () => {
+  if (window.proxyManager) window.proxyManager.init();
+});
 
 // Tracking thời gian proxy và trạng thái
 window.__proxyActivatedTime = 0; // Thời điểm proxy được kích hoạt
@@ -1645,7 +1697,7 @@ window.checkWebviewNetworkHealth = function(webviewId, callback) {
     }
 
     callback({ healthy: true, processId });
-    
+
   } catch (err) {
     console.error(`❌ [Network Health] Error checking webview ${webviewId}:`, err);
     callback({ healthy: false, reason: 'exception', error: err.message });
@@ -1657,22 +1709,22 @@ window.startWebviewHealthMonitor = function() {
   if (window.__healthMonitorInterval) {
     clearInterval(window.__healthMonitorInterval);
   }
-  
+
   const guardCfg = window.setProxyGuardConfig(window.PROXY_GUARD_CONFIG || {});
   console.log('🏥 Bắt đầu monitoring sức khỏe webview mỗi ' + Math.round(guardCfg.monitorIntervalMs / 1000) + ' giây...');
   window.startProxyGuardPanelRefresh();
-  
+
   window.__healthMonitorInterval = setInterval(() => {
     const activeWebviews = Array.from(document.querySelectorAll('webview[id^="U_"]'));
-    
+
     if (activeWebviews.length === 0) {
       console.log('🏥 [Health Monitor] Không có webview nào đang chạy');
       return;
     }
-    
+
     const batchSize = Math.min(activeWebviews.length, Math.max(1, Number(guardCfg.checkBatchSize || 4)));
     console.log(`🏥 [Health Monitor] Kiểm tra ${batchSize}/${activeWebviews.length} webview...`);
-    
+
     let unhealthyCount = 0;
     const unhealthyEvents = [];
     const finalizeBatch = () => {
@@ -1720,7 +1772,7 @@ window.startWebviewHealthMonitor = function() {
       });
     }
     window.__webviewHealthCursor = (window.__webviewHealthCursor + batchSize) % Math.max(1, activeWebviews.length);
-    
+
   }, Number(guardCfg.monitorIntervalMs || 120000));
 };
 
@@ -1739,7 +1791,7 @@ window.logProxyStatus = function() {
   console.log('📊 ===== PROXY STATUS =====');
   console.log('Proxy Active:', window.__isProxyActive);
   console.log('Proxy Activated Time:', window.__proxyActivatedTime ? new Date(window.__proxyActivatedTime).toLocaleString() : 'N/A');
-  
+
   if (window.__proxyActivatedTime > 0) {
     const proxyAge = Date.now() - window.__proxyActivatedTime;
     const proxyAgeMinutes = Math.floor(proxyAge / 60000);
@@ -1747,9 +1799,9 @@ window.logProxyStatus = function() {
     console.log('Proxy đã chạy:', proxyAgeMinutes, 'phút');
     console.log('Proxy còn lại:', remainingMinutes, 'phút (tối đa 60 phút)');
   }
-  
+
   console.log('Batch Start Time:', window.__batchStartTime ? new Date(window.__batchStartTime).toLocaleString() : 'N/A');
-  
+
   if (window.__batchStartTime > 0) {
     const batchAge = Date.now() - window.__batchStartTime;
     const batchAgeMinutes = Math.floor(batchAge / 60000);
@@ -1758,7 +1810,7 @@ window.logProxyStatus = function() {
     console.log('Batch đã chạy:', batchAgeMinutes, 'phút');
     console.log('Batch còn lại:', remainingBatch, 'phút (sophut_lamtuoi:', sophutLamtuoi, 'phút)');
   }
-  
+
   console.log('Proxy Needs Reset:', window.__proxyNeedsReset);
   console.log('Proxy Failure Count:', window.__proxyFailureCount);
   console.log('Last Reset IP Time:', window.__lastResetIP ? new Date(window.__lastResetIP).toLocaleString() : 'N/A');
@@ -1768,7 +1820,7 @@ window.logProxyStatus = function() {
 window.fnClearWebviewCache = function (webviewId, killProcess = false) {
   try {
     const wv = document.getElementById(webviewId);
-    
+
     if (!wv) {
       console.warn('[fnClearWebviewCache] Webview không tìm thấy:', webviewId);
       return;
@@ -1816,12 +1868,12 @@ window.fnClearWebviewCache = function (webviewId, killProcess = false) {
     if (killProcess && processId) {
       // QUAN TRỌNG: Kiểm tra processId KHÔNG phải là main process
       const mainProcessId = typeof process !== 'undefined' ? process.pid : null;
-      
+
       if (processId === mainProcessId) {
         console.error('[fnClearWebviewCache] ❌ CẢNH BÁO: processId trùng với main process! Bỏ qua kill để tránh crash app');
         return;
       }
-      
+
       setTimeout(() => {
         try {
           if (wv.terminate) {
@@ -1861,34 +1913,34 @@ window.fnClearWebviewCache = function (webviewId, killProcess = false) {
     // ⚠️ CHỈ XÓA PARTITION CỦA WEBVIEW, KHÔNG ĐỘNG ĐẾN DỮ LIỆU NW.JS APP
     // Kiểm tra option AUTO_CLEANUP_ON_CLOSE (mặc định: true)
     const autoCleanupOnClose = window.AUTO_CLEANUP_ON_CLOSE !== false;
-    
+
     if (partitionId && window.hasOwnProperty("process") && autoCleanupOnClose) {
       setTimeout(() => {
         try {
           const gui = require('nw.gui');
           const Path = require('path');
           const userDataPath = gui.App.dataPath;
-          
+
           // ⚠️ KIỂM TRA AN TOÀN: partitionId PHẢI là chuỗi hợp lệ
           if (!partitionId || partitionId.length < 5) {
             console.error('[fnClearWebviewCache] ❌ CẢNH BÁO: partitionId không hợp lệ, bỏ qua xóa để tránh xóa nhầm:', partitionId);
             return;
           }
-          
+
           // Đường dẫn tới thư mục partition CỦA WEBVIEW
           // VD: C:\Users\Nhien\AppData\Local\CSM\User Data\Default\Partitions\persist_xxxxx
           const partitionPath = Path.join(userDataPath, 'Default', 'Partitions', partitionId);
-          
+
           // ⚠️ KIỂM TRA AN TOÀN: Đường dẫn PHẢI chứa partitionId để tránh xóa thư mục root
           if (!partitionPath.includes(partitionId)) {
             console.error('[fnClearWebviewCache] ❌ CẢNH BÁO: Đường dẫn không chứa partitionId, bỏ qua xóa:', partitionPath);
             return;
           }
-          
+
           console.log('[fnClearWebviewCache] 🗑️ Xóa thư mục partition CỦA WEBVIEW:', partitionPath);
           deleteFolderRecursive(partitionPath);
           console.log('[fnClearWebviewCache] ✅ Đã xóa thư mục partition:', partitionId);
-          
+
           // ⚠️ XÓA thư mục Storage/ext/{partitionId} CỦA WEBVIEW (KHÔNG XÓA TOÀN BỘ Storage/ext)
           // Chỉ xóa thư mục cụ thể của partition này
           const storageExtPath = Path.join(userDataPath, 'Default', 'Storage', 'ext', partitionId);
@@ -1948,10 +2000,10 @@ window.fnClearCache = function () {
 if (window.AUTO_CLEANUP_CACHE_INTERVAL === true && !window.__cacheCleanupInterval) {
   window.__cacheCleanupInterval = setInterval(() => {
     const allWebviews = document.querySelectorAll('webview[id^="U_"]');
-    
+
     if (allWebviews.length > 0) {
       console.log('[AUTO-CLEANUP] 🧹 Dọn cache cho ' + allWebviews.length + ' webview (chỉ cache, giữ tabs chạy)...');
-      
+
       allWebviews.forEach(wv => {
         try {
           // Chỉ xóa browser cache, không xóa cookies/localStorage/indexedDB
@@ -2264,13 +2316,13 @@ window.stopTempPartitionJanitor = function() {
 // Điều này giải quyết vấn đề tích lũy storage từ các webview đã đóng
 window.cleanupAllPartitions = function(options = {}) {
   if (!window.hasOwnProperty("process")) return;
-  
+
   try {
     const gui = require('nw.gui');
     const Path = require('path');
     const fs = require('fs');
     const userDataPath = gui.App.dataPath;
-    
+
     // 1. Xóa tất cả partitions
     const partitionsPath = Path.join(userDataPath, 'Default', 'Partitions');
     if (fs.existsSync(partitionsPath)) {
@@ -2278,7 +2330,7 @@ window.cleanupAllPartitions = function(options = {}) {
       deleteFolderRecursive(partitionsPath);
       console.log('[CLEANUP-PARTITIONS] ✅ Đã xóa partitions');
     }
-    
+
     // 2. Xóa Storage/ext (chứa extension data của webview)
     const storageExtPath = Path.join(userDataPath, 'Default', 'Storage', 'ext');
     if (fs.existsSync(storageExtPath)) {
@@ -2286,7 +2338,7 @@ window.cleanupAllPartitions = function(options = {}) {
       deleteFolderRecursive(storageExtPath);
       console.log('[CLEANUP-PARTITIONS] ✅ Đã xóa Storage/ext');
     }
-    
+
     // 3. Chỉ xóa browser cache khi thực sự yêu cầu (tránh lỗi ERR_CACHE_READ_FAILURE lúc reload)
     const includeBrowserCache = options && options.includeBrowserCache === true;
     if (includeBrowserCache) {
@@ -2306,7 +2358,7 @@ window.cleanupAllPartitions = function(options = {}) {
     } else {
       console.log('[CLEANUP-PARTITIONS] ⏭️ Bỏ qua xóa browser cache (safe mode)');
     }
-    
+
     console.log('[CLEANUP-PARTITIONS] ✅ Hoàn tất dọn dẹp toàn bộ storage cũ');
   } catch (err) {
     console.error('[CLEANUP-PARTITIONS] ❌ Lỗi:', err.message);
@@ -2316,10 +2368,10 @@ window.cleanupAllPartitions = function(options = {}) {
 // Tự động chạy cleanup khi app khởi động
 if (!window.__initialCleanupDone) {
   window.__initialCleanupDone = true;
-  
+
   // Kiểm tra option AUTO_CLEANUP_ON_STARTUP (mặc định: false để tránh đụng cache lúc reload)
   const autoCleanup = window.AUTO_CLEANUP_ON_STARTUP === true;
-  
+
   if (autoCleanup) {
     setTimeout(() => {
       console.log('[STARTUP] 🚀 Bắt đầu cleanup partitions cũ (safe mode)...');
@@ -2375,24 +2427,24 @@ if (!window.__periodicCleanupInterval) {
   window.__periodicCleanupInterval = setInterval(() => {
     try {
       console.log('[PERIODIC-CLEANUP] 🧹 Performing periodic memory cleanup...');
-      
+
       // 1. Clear arrays nếu quá lớn (giữ size hợp lý)
       if (window.openTab && window.openTab.length > 100) {
         // Giữ lại 50 items gần nhất
         window.openTab = window.openTab.slice(-50);
         console.log('[PERIODIC-CLEANUP] ✅ Trimmed openTab array');
       }
-      
+
       // 2. Clear garbage từ window object
       if (window.__allTimers && Array.isArray(window.__allTimers)) {
         window.__allTimers = [];
         console.log('[PERIODIC-CLEANUP] ✅ Cleared timer tracking array');
       }
-      
+
       // 3. Check closed webviews và remove references
       const activeWebviews = document.querySelectorAll('webview[id^="U_"]');
       const activeIds = new Set(Array.from(activeWebviews).map(w => 'customTabListeners_' + w.id.replace('U_', '')));
-      
+
       // Cleanup listener references từ các tabs đã đóng
       Object.keys(window).forEach(key => {
         if (key.startsWith('customTabListeners_') && !activeIds.has(key)) {
@@ -2400,13 +2452,13 @@ if (!window.__periodicCleanupInterval) {
         }
       });
       console.log('[PERIODIC-CLEANUP] ✅ Cleaned up references for closed tabs');
-      
+
       // 4. Force garbage collection nếu khả dụng (Chrome/Node.js)
       if (global && global.gc) {
         global.gc();
         console.log('[PERIODIC-CLEANUP] ✅ Forced garbage collection');
       }
-      
+
       // 5. Log hiện trạng memory (nếu khả dụng)
       if (typeof process !== 'undefined' && process.memoryUsage) {
         const memUsage = process.memoryUsage();
@@ -2414,18 +2466,18 @@ if (!window.__periodicCleanupInterval) {
         const rssMB = (memUsage.rss / 1024 / 1024).toFixed(2);
         console.log(`[PERIODIC-CLEANUP] 📊 Memory: Heap ${heapMB}MB / RSS ${rssMB}MB`);
       }
-      
+
       console.log('[PERIODIC-CLEANUP] ✅ Periodic cleanup completed');
     } catch (e) {
       console.error('[PERIODIC-CLEANUP] ❌ Error:', e.message);
     }
   }, 60000); // Mỗi 60 giây (1 phút)
-  
+
   console.log('[PERIODIC-CLEANUP] ✅ Periodic cleanup started (every 60s)');
 }
 //Thread
-var blob = new Blob([`self.addEventListener('message', function(e) { 
-  self.postMessage(e.data); // Send data back to main script 
+var blob = new Blob([`self.addEventListener('message', function(e) {
+  self.postMessage(e.data); // Send data back to main script
 }, false);`], { type: 'text/javascript' });
 var blobURL = (window.URL ? URL : webkitURL).createObjectURL(blob, {
   type: 'application/javascript; charset=utf-8'
@@ -2579,44 +2631,44 @@ window.shouldChangeProxyNow = function() {
   if (!window.__isProxyActive || window.__batchStartTime === 0) {
     return false;
   }
-  
+
   const sophutLamtuoi = getStayMinutes(); // Lấy số phút từ input
   const proxyRuntime = Date.now() - window.__batchStartTime;
   const sophutLamtuoiMs = sophutLamtuoi * 60000; // Chuyển sang milliseconds
-  
+
   // Kiểm tra nếu đã chạy đủ thời gian sophut_lamtuoi
   if (proxyRuntime >= sophutLamtuoiMs) {
     console.log(`⏰ Đã chạy ${Math.ceil(proxyRuntime/60000)} phút >= ${sophutLamtuoi} phút (sophut_lamtuoi), cần đổi proxy`);
     return true;
   }
-  
+
   return false;
 };
 
 window.forceResetProxyAfter60Minutes = function() {
   const proxyAge = Date.now() - window.__proxyActivatedTime;
   const remainingTime = window.PROXY_MAX_LIFETIME - proxyAge;
-  
+
   if (remainingTime <= 0) {
     console.log('⏰ Proxy đã chạy 60 phút, bắt đầu force reset...');
-    
+
     // KHÔNG đóng tabs ở đây, để fnResetIP xử lý
     // fnResetIP sẽ tự động đóng tất cả tabs ở đầu hàm
-    
+
     // 1. Tắt proxy
     proxy_deactivate().then(function(success) {
       if (success) {
         console.log('✅ Đã tắt proxy');
         window.__isProxyActive = false;
       }
-      
+
       // 2. Reset các biến tracking và credentials
       window.__proxyActivatedTime = 0;
       window.__getTMProxyRequestPool = null; // Clear cache để force lấy mới
       window.__proxyUsername = '';
       window.__proxyPassword = '';
       console.log('🔐 Đã clear proxy credentials');
-      
+
       // 3. Chờ 2 giây rồi lấy proxy mới và tiếp tục chạy
       setTimeout(function() {
         console.log('🔄 Bắt đầu lấy proxy mới sau khi reset 60 phút...');
@@ -2641,23 +2693,23 @@ window.forceResetProxyAfter60Minutes = function() {
 
 window.fnResetIP = function (force = false) {
   console.log('🔄 [fnResetIP] Bắt đầu reset IP...' + (force ? ' (FORCE mode - bỏ qua throttle)' : ''));
-  
+
   if (!isRunning) {
     console.log('[fnResetIP] App đã dừng, không tiếp tục reset IP');
     return;
   }
-  
+
   // QUAN TRỌNG: CHỈ ĐÓNG TABS KHI THỰC SỰ CẦN ĐỔI PROXY
   // KHÔNG đóng tabs khi chỉ đang chờ proxy active lần đầu hoặc throttle
   let shouldCloseTabs = false;
   let closeReason = '';
-  
+
   // TRƯỜNG HỢP 1: Proxy bị lỗi, cần reset khẩn cấp
   if (window.__proxyNeedsReset) {
     shouldCloseTabs = true;
     closeReason = 'Proxy lỗi/authentication error';
     console.log('🚨 Proxy cần reset do authentication error hoặc hết hạn');
-    
+
     // Tắt proxy hiện tại
     if (window.__isProxyActive) {
       proxy_deactivate().then(() => {
@@ -2672,7 +2724,7 @@ window.fnResetIP = function (force = false) {
         window.__proxyPassword = '';
       });
     }
-    
+
     // Reset tracking
     window.__proxyNeedsReset = false;
     window.__proxyActivatedTime = 0;
@@ -2681,7 +2733,7 @@ window.fnResetIP = function (force = false) {
     window.__proxyFailureCount++;
     console.log(`⚠️ Số lần proxy thất bại: ${window.__proxyFailureCount}`);
   }
-  
+
   // TRƯỜNG HỢP 2: Đã đến thời điểm đổi proxy theo sophut_lamtuoi
   else if (window.shouldChangeProxyNow()) {
     shouldCloseTabs = true;
@@ -2689,7 +2741,7 @@ window.fnResetIP = function (force = false) {
     console.log('⏰ Đã đến thời điểm đổi proxy theo sophut_lamtuoi');
     window.__batchStartTime = 0;
   }
-  
+
   // TRƯỜNG HỢP 3: Proxy đã chạy >= 60 phút (hard limit)
   else if (window.__proxyActivatedTime > 0) {
     const proxyAge = Date.now() - window.__proxyActivatedTime;
@@ -2697,7 +2749,7 @@ window.fnResetIP = function (force = false) {
       shouldCloseTabs = true;
       closeReason = 'Proxy đã chạy 60 phút (hard limit)';
       console.log('⏰ Proxy đã chạy 60 phút, force reset...');
-      
+
       proxy_deactivate().then(() => {
         console.log('✅ Đã tắt proxy hết hạn');
         window.__isProxyActive = false;
@@ -2709,35 +2761,35 @@ window.fnResetIP = function (force = false) {
         window.__proxyUsername = '';
         window.__proxyPassword = '';
       });
-      
+
       window.__proxyActivatedTime = 0;
       window.__batchStartTime = 0;
     }
   }
-  
+
 // ============================================================
 // HELPER: Đóng tất cả tabs và xóa sạch dữ liệu
 // ============================================================
 window.closeAllTabsAndCleanup = function(reason = 'Manual cleanup') {
   console.log(`[closeAllTabsAndCleanup] 🗑️ Bắt đầu đóng tất cả tabs - Lý do: ${reason}`);
-  
+
   const webviewsToClose = [];
   const allWebviews = document.querySelectorAll('[id^="U_"]');
-  
+
   allWebviews.forEach(function (el) {
     const id_tab = el.getAttribute("id");
     if (id_tab && id_tab.indexOf("tabSetting") === -1) {
       webviewsToClose.push(id_tab.replace('U_', ''));
     }
   });
-  
+
   if (webviewsToClose.length === 0) {
     console.log('[closeAllTabsAndCleanup] ℹ️ Không có tab nào để đóng');
     return;
   }
-  
+
   console.log(`[closeAllTabsAndCleanup] 🗑️ Đóng ${webviewsToClose.length} tabs: ${webviewsToClose.join(', ')}`);
-  
+
   // Đóng từng tab một cách tuần tự
   let closedCount = 0;
   webviewsToClose.forEach((tab_id, index) => {
@@ -2746,22 +2798,22 @@ window.closeAllTabsAndCleanup = function(reason = 'Manual cleanup') {
         fnRemoveTab(tab_id);
         closedCount++;
         console.log(`[closeAllTabsAndCleanup] ✅ [${closedCount}/${webviewsToClose.length}] Đã đóng: ${tab_id}`);
-        
+
         // Sau khi đóng tab cuối, chạy cleanup toàn diện
         if (closedCount === webviewsToClose.length) {
           setTimeout(() => {
             console.log('[closeAllTabsAndCleanup] 🧹 Chạy cleanup toàn diện sau khi đóng hết tabs...');
-            
+
             // Clear global cache
             if (typeof fnClearCache === 'function') {
               fnClearCache();
             }
-            
+
             // Cleanup partitions nếu cần
             if (typeof cleanupAllPartitions === 'function') {
               cleanupAllPartitions();
             }
-            
+
             // Force garbage collection nếu có
             try {
               if (window.gc) {
@@ -2769,7 +2821,7 @@ window.closeAllTabsAndCleanup = function(reason = 'Manual cleanup') {
                 console.log('[closeAllTabsAndCleanup] 🗑️ Forced garbage collection');
               }
             } catch(gcErr) {}
-            
+
             console.log('[closeAllTabsAndCleanup] ✅ Hoàn tất cleanup toàn diện');
           }, 2000);
         }
@@ -2778,7 +2830,7 @@ window.closeAllTabsAndCleanup = function(reason = 'Manual cleanup') {
       }
     }, index * 300); // Delay 300ms giữa mỗi tab để tránh quá tải
   });
-  
+
   return webviewsToClose.length;
 };
 
@@ -2788,11 +2840,11 @@ window.closeAllTabsAndCleanup = function(reason = 'Manual cleanup') {
 // ============================================================
 if (!window.__appCleanupRegistered) {
   window.__appCleanupRegistered = true;
-  
+
   // Handler cleanup toàn diện khi đóng app
   const appCleanupHandler = function(e) {
     console.log('[APP-CLEANUP] 🧹 Bắt đầu cleanup trước khi đóng app...');
-    
+
     try {
       // 1. Sử dụng closeAllTabsAndCleanup để đóng tabs một cách an toàn
       if (typeof closeAllTabsAndCleanup === 'function') {
@@ -2824,7 +2876,7 @@ if (!window.__appCleanupRegistered) {
           }
         });
       }
-      
+
       // 2. Clear intervals
       if (window.__cacheCleanupInterval) {
         clearInterval(window.__cacheCleanupInterval);
@@ -2835,17 +2887,17 @@ if (!window.__appCleanupRegistered) {
       if (window.tmRun) {
         clearInterval(window.tmRun);
       }
-      
+
       console.log('[APP-CLEANUP] ✅ Cleanup hoàn tất');
-      
+
     } catch(err) {
       console.error('[APP-CLEANUP] ❌ Lỗi trong quá trình cleanup:', err);
     }
   };
-  
+
   // Register cleanup handlers
   window.addEventListener('beforeunload', appCleanupHandler);
-  
+
   // NW.js specific: cleanup khi đóng window
   if (window.nw && window.nw.Window) {
     try {
@@ -2853,19 +2905,19 @@ if (!window.__appCleanupRegistered) {
       win.on('close', function() {
         console.log('[NW-CLEANUP] 🧹 Window đang đóng, chạy cleanup...');
         appCleanupHandler();
-        
+
         // Delay một chút để cleanup hoàn tất
         setTimeout(() => {
           this.close(true); // Force close
         }, 500);
       });
-      
+
       console.log('[APP-CLEANUP] ✅ Đã đăng ký cleanup handlers cho NW.js');
     } catch(nwErr) {
       console.warn('[APP-CLEANUP] ⚠️ Không thể đăng ký NW.js cleanup:', nwErr);
     }
   }
-  
+
   console.log('[APP-CLEANUP] ✅ Đã đăng ký app cleanup handlers');
 }
 
@@ -2878,7 +2930,7 @@ if (!window.__appCleanupRegistered) {
   } else {
     console.log('✓ [fnResetIP] Giữ nguyên tabs đang chạy (không cần đổi proxy)');
   }
-  
+
   // ============================================
   // THROTTLE CHECK - KHÔNG LẤY PROXY MỚI NẾU:
   // ============================================
@@ -2895,7 +2947,7 @@ if (!window.__appCleanupRegistered) {
       console.log('⏳ API yêu cầu chờ trước khi lấy proxy mới... (còn ' + remainingTime + ' giây)');
       return;
     }
-    
+
     // Kiểm tra throttle dựa trên sophut_lamtuoi (chỉ khi đã có proxy active)
     const stay = getStayMinutes();
     const minWaitTime = stay * 60000 + 120000; // thêm 2 phút buffer
@@ -2906,7 +2958,7 @@ if (!window.__appCleanupRegistered) {
   } else if (force) {
     console.log('✅ [fnResetIP] FORCE mode - bỏ qua throttle check, đổi proxy ngay!');
   }
-  
+
   window.__lastResetIP = Date.now();
 
   var api_token = document.querySelector('#api_token').value;
@@ -2959,19 +3011,19 @@ if (!window.__appCleanupRegistered) {
             data: { "uname" : uname ,"passwd" : hashPass},
             dataType: "json"
           });
-          request.done(function( responseData,textStatus, jqXHR ) {      
+          request.done(function( responseData,textStatus, jqXHR ) {
 
             if(responseData.login_fail){
               dialogErrorBox(changeLanguageString(responseData.login_fail));
-            } else {            
-              /* Set the cookie Note API response will have qSessId as sessionId*/    
+            } else {
+              /* Set the cookie Note API response will have qSessId as sessionId*/
               var expires ="";
-              if(parseInt(responseData.remain)> 0) 
+              if(parseInt(responseData.remain)> 0)
               {
                 var date = new Date();
                 date.setTime(date.getTime() + (24 * 60 * responseData.remain * 1000));
-                var expires = ";expires=" + date.toGMTString();             	
-              }      
+                var expires = ";expires=" + date.toGMTString();
+              }
               document.cookie ="DWRLOGGEDID="+getCookie("qSessId")+expires;
               document.cookie ="DWRLOGGEDUSER="+uname+expires;
               document.cookie ="DWRLOGGEDTIMEOUT="+responseData.remain+expires;
@@ -2985,13 +3037,13 @@ if (!window.__appCleanupRegistered) {
               login_setLanguage();
               index_getWhoAmI();
               doSystemNameGet();
-              index_getLanguage();		
+              index_getLanguage();
               index_GetSupportNetwork();
               login_syncWithHost();
               index_getWanStatus(false);
               index_getWiFiClients();
                var url_path = location.search;
-              var curr_page = "";	    
+              var curr_page = "";
               if (url_path != "" ) {
               arg=url_path.split("&");
               if (arg[0].substring(1, 8) != "WWW_SID") {
@@ -3003,7 +3055,7 @@ if (!window.__appCleanupRegistered) {
                 createSubMenu("subMenu","home.asp","pageTitle");
               }
               else
-                loadpage(curr_page); 
+                loadpage(curr_page);
                     loadpage('system_reboot.asp');
                     setTimeout(function(){
                       doIFrameSet('ok');
@@ -3018,7 +3070,7 @@ if (!window.__appCleanupRegistered) {
             if(jqXHR.status == 401) {
               var responseData = jQuery.parseJSON(jqXHR.responseText);
               alert(changeLanguageString(responseData.login_fail));
-            }		 
+            }
           });
           request.always(function(responseData,textStatus, jqXHR ) {
 
@@ -3053,7 +3105,7 @@ if (!window.__appCleanupRegistered) {
       getTMProxy(api_token, api_token_wwproxy, function (msg) {
         try {
           console.log('[fnResetIP getTMProxy callback] 🔔 Callback được gọi, msg:', JSON.stringify(msg).substring(0, 200) + '...');
-          
+
           // ✅ QUAN TRỌNG: Extract timeout từ API response
           // API trả về `next_request` (unix timestamp tính bằng ms hoặc giây)
           // hoặc `timeout` (số giây chờ)
@@ -3075,7 +3127,7 @@ if (!window.__appCleanupRegistered) {
             window.__getTMProxyNextRequest = apiNextRequestTime;
             console.log('✅ [getTMProxy] Lưu timeout từ API: ' + waitSeconds + 's (' + new Date(apiNextRequestTime).toLocaleString() + ')');
           }
-          
+
           // Xử lý lỗi rate limit từ API wwproxy
           if ((1 * msg['code'] === 5 || 1 * msg['errorCode'] === 1) && msg['message'] !== "") {
             canhbao("Chờ đổi IP mới " + msg['message']);
@@ -3103,17 +3155,17 @@ if (!window.__appCleanupRegistered) {
           if ((msg.data && (msg.data['proxy'] || msg.data['https'])) && (msg.success || msg.code === 0 || msg.errorCode === 0)) {
             // Webview đã được đóng hết ở đầu hàm fnResetIP
             console.log('✅ Tất cả tabs đã được đóng (xử lý ở đầu hàm)');
-            // const gui = require('nw.gui'); 
+            // const gui = require('nw.gui');
             // gui.App.clearCache();
             // fnClearCache();
             var password = msg.data['password'], username = msg.data['username'];
             var proxy_addess = encodeURIComponent(username) + ':' + encodeURIComponent(password) + '@' + msg.data['https'];
-            
+
             // QUAN TRỌNG: Lưu proxy credentials vào window để listener 'login' sử dụng cho proxy auth
             window.__proxyUsername = username;
             window.__proxyPassword = password;
             console.log(`💾 [Proxy Credentials] Lưu credentials: ${username}@***`);
-            
+
             // var proxy_server='http://'+proxy_addess;
             // console.log(msg);
             if (msg.data['proxy'])
@@ -3126,17 +3178,17 @@ if (!window.__appCleanupRegistered) {
             if (msg.data['ipAddress'])
               public_ip = msg.data['ipAddress'];
             // console.log(proxy_addess,public_ip);
-            
+
             // ✅ QUAN TRỌNG: Kiểm tra trạng thái proxy trước khi bật
             // Nếu proxy đã bật với cùng địa chỉ, không cần bật lại
             console.log('🔍 Kiểm tra trạng thái proxy hiện tại...');
             proxy_status_check().then(function(isProxyOn) {
               console.log('📊 Proxy hiện tại: ' + (isProxyOn ? 'BẬT' : 'TẮT'));
-              
+
               // Đánh dấu đang xác thực proxy
               window.__proxyAuthenticating = true;
               console.log('🔐 Bắt đầu xác thực/bật proxy với username:', username);
-              
+
               // Tạo object proxy info để pass cho proxy_change_address
               const proxyInfo = {
                 https: msg.data['https'],
@@ -3145,7 +3197,7 @@ if (!window.__appCleanupRegistered) {
                 password: password,
                 public_ip: public_ip
               };
-              
+
               console.log('📋 [getTMProxy] proxyInfo object được tạo:', JSON.stringify({
                 https: proxyInfo.https,
                 proxy: proxyInfo.proxy,
@@ -3153,7 +3205,7 @@ if (!window.__appCleanupRegistered) {
                 password: '***',
                 public_ip: proxyInfo.public_ip
               }));
-              
+
               // Luôn gọi proxy_change_address để đảm bảo proxy được bật với địa chỉ mới
               proxy_change_address(proxyInfo).then(function (proxyActive) {
                 // Kết thúc quá trình xác thực
@@ -3162,38 +3214,38 @@ if (!window.__appCleanupRegistered) {
                 if (proxyActive) {
                   console.log("✅ Proxy đã được kích hoạt thành công!");
                   window.updateActiveProxyContext(proxyInfo);
-                  
+
                   // QUAN TRỌNG: Đánh dấu proxy đã được kích hoạt và bắt đầu đếm thời gian
                   window.__isProxyActive = true;
                   window.__proxyActivatedTime = Date.now();
                   window.__batchStartTime = Date.now(); // Bắt đầu tính thời gian batch
-                  
+
                   // Reset các biến lỗi khi proxy thành công
                   window.__proxyNeedsReset = false;
                   window.__proxyFailureCount = 0; // Reset failure count khi proxy hoạt động thành công
-                  
+
                   console.log('✅ Đã reset proxy failure count về 0');
-                  
+
                   // Clear timer cũ nếu có
                   if (window.__proxyLifetimeTimer) {
                     clearTimeout(window.__proxyLifetimeTimer);
                   }
-                  
+
                   // Set timer để tự động reset sau 60 phút (hard limit)
                   window.__proxyLifetimeTimer = setTimeout(function() {
                     console.log('⏰ Đã hết 60 phút, tự động force reset proxy...');
                     window.forceResetProxyAfter60Minutes();
                   }, window.PROXY_MAX_LIFETIME);
-                  
+
                   const sophutLamtuoi = getStayMinutes();
                   console.log(`⏰ Proxy đã active. Sẽ đổi proxy sau ${sophutLamtuoi} phút (sophut_lamtuoi) hoặc tối đa 60 phút`);
-                  
+
                   // QUAN TRỌNG: Bắt đầu mở tabs ngay khi proxy active, không cần chờ verify IP
                   // Verify IP chỉ để hiển thị, không block việc chạy
                   console.log('✅ Proxy đã active, bắt đầu mở tabs ngay...');
                   if (document.querySelectorAll('[id^="U_"]').length === 0) {
                     window.openTab = [];
-                    // ✅ Gọi runParallelProcessing (alias: runSequentiallyWithReduce) 
+                    // ✅ Gọi runParallelProcessing (alias: runSequentiallyWithReduce)
                     // MỚI: Async, chờ batch này hoàn tất rồi mới gọi reset IP tiếp
                     console.log('[fnResetIP] 🚀 Gọi runSequentiallyWithReduce() để start batch tiếp...');
                     try {
@@ -3206,7 +3258,7 @@ if (!window.__appCleanupRegistered) {
                   } else {
                     console.log('⚠️ [fnResetIP] Đã có tabs đang chạy, không mở thêm');
                   }
-                  
+
                   // Verify IP để hiển thị (không block)
                   function verifyIPChange() {
                     var ip_to_check = public_ip;
@@ -3256,7 +3308,7 @@ if (!window.__appCleanupRegistered) {
               // Thử bật proxy anyway
               window.__proxyAuthenticating = true;
               console.log('🔐 Bắt đầu bật proxy (fallback)...');
-              
+
               // Tạo object proxy info
               const proxyInfo = {
                 https: msg.data['https'],
@@ -3265,7 +3317,7 @@ if (!window.__appCleanupRegistered) {
                 password: password,
                 public_ip: public_ip
               };
-              
+
               proxy_change_address(proxyInfo).then(function (proxyActive) {
                 window.__proxyAuthenticating = false;
                 if (proxyActive) {
@@ -3275,22 +3327,22 @@ if (!window.__appCleanupRegistered) {
                   window.__isProxyActive = true;
                   window.__proxyActivatedTime = Date.now();
                   window.__batchStartTime = Date.now(); // Bắt đầu tính thời gian batch
-                  
+
                   // Reset các biến lỗi khi proxy thành công
                   window.__proxyNeedsReset = false;
                   window.__proxyFailureCount = 0;
                   console.log('✅ Đã reset proxy failure count về 0');
-                  
+
                   if (window.__proxyLifetimeTimer) {
                     clearTimeout(window.__proxyLifetimeTimer);
                   }
                   window.__proxyLifetimeTimer = setTimeout(function() {
                     window.forceResetProxyAfter60Minutes();
                   }, window.PROXY_MAX_LIFETIME);
-                  
+
                   const sophutLamtuoiFallback = getStayMinutes();
                   console.log(`⏰ Proxy active (fallback). Sẽ đổi sau ${sophutLamtuoiFallback} phút`);
-                  
+
                   if (window.__isProxyActive && document.querySelectorAll('[id^="U_"]').length === 0) {
                     console.log('[fnResetIP] 🚀 [fallback] Gọi runSequentiallyWithReduce()...');
                     window.openTab = [];
@@ -3343,12 +3395,12 @@ window.TabManager = {
     return Array.from(document.querySelectorAll('webview[id^="U_"]'))
       .filter(wv => wv.id !== 'U_reset3G');
   },
-  
+
   // Đếm số tabs đang mở
   getActiveTabCount: function() {
     return this.getActiveWebviews().length;
   },
-  
+
   // Kiểm tra có thể tạo tab mới không
   canCreateTab: function() {
     // ⚠️ QUAN TRỌNG: Nếu đang chờ batch tắt, không cho tạo tab mới
@@ -3361,7 +3413,7 @@ window.TabManager = {
       }
       return false;
     }
-    
+
     const count = this.getActiveTabCount();
     const canCreate = count < this.MAX_TABS;
     if (!canCreate) {
@@ -3374,7 +3426,7 @@ window.TabManager = {
     }
     return canCreate;
   },
-  
+
   // Chờ đến khi có slot trống (polling)
   // Timeout tăng lên 15 phút vì mỗi tab giờ chạy ~5 phút
   waitForSlot: function(timeout = 900000) {
@@ -3384,7 +3436,7 @@ window.TabManager = {
       const checkInterval = setInterval(() => {
         const elapsed = Date.now() - startTime;
         const elapsedSecs = Math.round(elapsed / 1000);
-        
+
         // ⚠️ Nếu đang chờ batch tắt, báo nhưng chỉ mỗi 30s
         if (this.isWaitingForBatchClose) {
           const now = Date.now();
@@ -3401,7 +3453,7 @@ window.TabManager = {
             lastWarnTime = now;
           }
         }
-        
+
         if (this.canCreateTab()) {
           clearInterval(checkInterval);
           console.log(`[TabManager] ✅ Slot available sau ${elapsedSecs}s`);
@@ -3428,7 +3480,7 @@ window.TabManager = {
       }, 1000); // Kiểm tra mỗi giây
     });
   },
-  
+
   // Lấy thống kê
   getStats: function() {
     return {
@@ -3451,7 +3503,7 @@ window.LinkQueueManager = {
   pending: new Set(),
   // Chỉ số hiện tại trong queue
   currentIndex: 0,
-  
+
   // Thêm links từ dataUser vào queue
   addFromDataUser: function(dataUser) {
     if (!Array.isArray(dataUser)) return;
@@ -3469,7 +3521,7 @@ window.LinkQueueManager = {
     });
     console.log(`[LinkQueue] Đã thêm ${dataUser.length} links từ dataUser. Tổng queue: ${this.queue.length}`);
   },
-  
+
   // Thêm links từ webview vào queue
   addFromWebview: function(links, tabid, isRunAds) {
     if (!Array.isArray(links)) return;
@@ -3491,14 +3543,14 @@ window.LinkQueueManager = {
     });
     console.log(`[LinkQueue] Đã thêm ${added}/${links.length} links từ webview. Tổng queue: ${this.queue.length}`);
   },
-  
+
   // Lấy batch links tiếp theo để xử lý
   getNextBatch: function(batchSize) {
     if (this.queue.length === 0) {
       console.warn('[LinkQueue] Queue trống!');
       return [];
     }
-    
+
     // Nếu đã chạy hết queue, reset và bắt đầu lại (xoay vòng)
     if (this.currentIndex >= this.queue.length) {
       console.log(`[LinkQueue] ♻️ Đã xử lý hết ${this.queue.length} links. Xoay vòng lại từ đầu...`);
@@ -3507,19 +3559,19 @@ window.LinkQueueManager = {
       this.processed.clear();
       this.queue.forEach(item => this.pending.add(item.id));
     }
-    
+
     const batch = this.queue.slice(this.currentIndex, this.currentIndex + batchSize);
     console.log(`[LinkQueue] Lấy batch ${batch.length} links từ vị trí ${this.currentIndex}/${this.queue.length}`);
     return batch;
   },
-  
+
   // Đánh dấu link đã xử lý
   markAsProcessed: function(linkId) {
     this.processed.add(linkId);
     this.pending.delete(linkId);
     this.currentIndex++;
   },
-  
+
   // Reset toàn bộ queue
   reset: function() {
     this.queue = [];
@@ -3528,7 +3580,7 @@ window.LinkQueueManager = {
     this.currentIndex = 0;
     console.log('[LinkQueue] ✓ Reset toàn bộ queue');
   },
-  
+
   // Lấy thống kê
   getStats: function() {
     return {
@@ -3539,7 +3591,7 @@ window.LinkQueueManager = {
       progress: this.queue.length > 0 ? ((this.processed.size / this.queue.length) * 100).toFixed(1) : 0
     };
   },
-  
+
   // Hiển thị thông tin chi tiết queue (debug)
   showDetails: function() {
     const stats = this.getStats();
@@ -3620,7 +3672,7 @@ window.getDataUserOption = function (forceRefresh = false) {
       if (success && Array.isArray(data)) {
         window.dataUserOption = data;
         console.log("[getDataUserOption] Refresh thành công, số lượng:", window.dataUserOption.length);
-        
+
         // Reload grid nếu có
         if (typeof window.renderKeywordGrid === 'function') {
           window.renderKeywordGrid();
@@ -3792,7 +3844,7 @@ window.UnifiedLinkManager = {
   processedLinks: new Set(), // Links đã xử lý xong
   currentProxyPage: 0, // Trang proxy hiện tại
   currentBatchIndex: 0, // Vị trí hiện tại trong queue (không dùng splice)
-  
+
   // Thêm links từ csmUserData ban đầu
   addFromDataUser: function(dataUserArray) {
     console.log('[UnifiedLinkManager] Thêm', dataUserArray.length, 'links từ csmUserData');
@@ -3821,7 +3873,7 @@ window.UnifiedLinkManager = {
     this.sortQueue();
     console.log('[UnifiedLinkManager] Đã thêm', addedCount, 'links (xoay vòng). Tổng links trong queue:', this.linkQueue.length);
   },
-  
+
   // Thêm links từ webview (quét được trong trang)
   addFromWebview: function(urls, parentTabId, isRunAds) {
     let addedCount = 0;
@@ -3840,13 +3892,13 @@ window.UnifiedLinkManager = {
         addedCount++;
       }
     });
-    
+
     if (addedCount > 0) {
       this.sortQueue();
       console.log('[UnifiedLinkManager] Thêm', addedCount, 'links mới từ webview. Tổng:', this.linkQueue.length);
     }
   },
-  
+
   // Sắp xếp queue: ưu tiên theo priority, sau đó theo thời gian thêm
   sortQueue: function() {
     this.linkQueue.sort((a, b) => {
@@ -3854,7 +3906,7 @@ window.UnifiedLinkManager = {
       return a.addedAt - b.addedAt;
     });
   },
-  
+
   // Lấy batch links để xử lý (theo số tab giới hạn)
   // FIX: Thay splice (xóa) thành slice (chỉ lấy) để tránh sót item
   getNextBatch: function(batchSize) {
@@ -3865,14 +3917,14 @@ window.UnifiedLinkManager = {
       // Reset processedLinks để xoay vòng
       this.processedLinks.clear();
     }
-    
+
     // Lấy batch từ vị trí currentBatchIndex
     const batch = this.linkQueue.slice(this.currentBatchIndex, this.currentBatchIndex + batchSize);
     console.log(`[UnifiedLinkManager] Lấy batch ${batch.length} links từ vị trí ${this.currentBatchIndex}/${this.linkQueue.length}`);
-    
+
     return batch;
   },
-  
+
   // Đánh dấu link đã xử lý và di chuyển con trỏ
   markAsProcessed: function(linkId) {
     this.processedLinks.add(linkId);
@@ -3882,7 +3934,7 @@ window.UnifiedLinkManager = {
       this.currentBatchIndex++;
     }
   },
-  
+
   // Lấy thống kê
   getStats: function() {
     return {
@@ -3892,7 +3944,7 @@ window.UnifiedLinkManager = {
       progress: this.allLinks.size > 0 ? Math.round((this.processedLinks.size / this.allLinks.size) * 100) : 0
     };
   },
-  
+
   // Reset toàn bộ
   reset: function() {
     this.allLinks.clear();
@@ -3907,22 +3959,22 @@ window.UnifiedLinkManager = {
 // Hàm xử lý chính - Logic song song với quản lý proxy theo trang
 const runParallelProcessing = async () => {
   console.log('[Parallel] 🎬 START runParallelProcessing()');
-  
+
   // 1. Kiểm tra điều kiện cơ bản
   if (window.__waitingForAPIRetry) {
     const waitTime = Math.ceil((window.__getTMProxyLastTime - Date.now()) / 1000);
     console.warn(`⏸️ [Parallel] Đang chờ API rate limit (còn ${waitTime}s)`);
     return;
   }
-  
+
   if (!window.__isProxyActive) {
     console.warn("⚠️ [Parallel] Proxy chưa active, gọi fnResetIP...");
     setTimeout(fnResetIP, 1000);
     return;
   }
-  
+
   console.log("✅ [Parallel] Bắt đầu xử lý song song");
-  
+
   // 2. Khởi tạo link queue lần đầu từ dataUserOption
   if (window.UnifiedLinkManager.linkQueue.length === 0) {
     const currentData = window.getDataUserOption();
@@ -3932,33 +3984,33 @@ const runParallelProcessing = async () => {
     }
     window.UnifiedLinkManager.addFromDataUser(currentData);
   }
-  
+
   // 3. Lấy cấu hình
   const maxTabs = parseInt(document.querySelector('#maxTab').value) || 5;
   const delayTime = getStayMinutes();
-  
+
   // 4. Lấy batch links để xử lý
   const batch = window.UnifiedLinkManager.getNextBatch(maxTabs);
-  
+
   if (batch.length === 0) {
     console.log("[Parallel] ⚠️ Không còn links trong queue");
-    
+
     // Kiểm tra nếu đã xử lý hết tất cả links, reset và xoay vòng lại từ đầu
     const stats = window.UnifiedLinkManager.getStats();
     if (stats.processed >= stats.total && stats.total > 0) {
       console.log("[Parallel] 🔄 Đã xử lý hết tất cả links. Xoay vòng lại từ đầu...");
-      
+
       // ✅ FULL RESET để xoay vòng (vì linkQueue sẽ không thay đổi, chỉ cần reset con trỏ)
       window.UnifiedLinkManager.processedLinks.clear();
       window.UnifiedLinkManager.currentBatchIndex = 0; // Reset index
-      
+
       // 🔥 FIX: Nếu linkQueue đã có items từ lần chạy trước, chỉ cần reset index và processed
       // Không cần gọi addFromDataUser lại vì queue vẫn còn items cũ
       const pendingItems = window.UnifiedLinkManager.linkQueue.length;
-      
+
       if (pendingItems > 0) {
         console.log("[Parallel] ✅ Queue vẫn có", pendingItems, "links. Bắt đầu vòng lặp mới...");
-        
+
         // Tiếp tục xử lý ngay (với batch mới)
         setTimeout(() => runParallelProcessing(), 1000);
         return;
@@ -3968,22 +4020,22 @@ const runParallelProcessing = async () => {
         if (currentData.length > 0) {
           window.UnifiedLinkManager.addFromDataUser(currentData);
           console.log("[Parallel] ✅ Đã reload", currentData.length, "links từ đầu");
-          
+
           // Tiếp tục xử lý ngay
           setTimeout(() => runParallelProcessing(), 1000);
           return;
         }
       }
     }
-    
+
     console.log("[Parallel] ⏸️ Không có dữ liệu để xử lý");
     return;
   }
-  
+
   // 5. Log thống kê
   const stats = window.UnifiedLinkManager.getStats();
   console.log(`[Parallel] Tiến độ: ${stats.processed}/${stats.total} (${stats.progress}%). Xử lý ${batch.length} links`);
-  
+
   // 6. Tạo các webview song song (không chờ nhau)
   const createPromises = batch.map(async (item, index) => {
     try {
@@ -3997,11 +4049,11 @@ const runParallelProcessing = async () => {
           return;
         }
       }
-      
+
       let content = '';
       let url = '';
       let tabId = '';
-      
+
       if (item.type === 'dataUser') {
         const keyword = item.data || {};
         const kieuChayValue = parseInt(keyword.kieu_chay, 10) || 0;
@@ -4024,7 +4076,7 @@ const runParallelProcessing = async () => {
         // Bám theo file mẫu: khi tu_khoa rỗng thì ưu tiên mở trực tiếp link đích.
         url = tuKhoa ? "https://www.google.com/" : domainOrLink;
         tabId = `gAds_${Date.now()}_${index}`;
-        
+
       } else if (item.type === 'webview') {
       // Script để quét thêm links trong trang
       const scanLinksScript = `
@@ -4035,13 +4087,13 @@ const runParallelProcessing = async () => {
               .filter(href => {
                 try {
                   const url = new URL(href);
-                  return url.host === location.host && 
-                         !href.includes('login') && 
+                  return url.host === location.host &&
+                         !href.includes('login') &&
                          !href.includes('#') &&
                          href.startsWith('http');
                 } catch(e) { return false; }
               });
-            
+
             if (links.length > 0) {
               console.log(JSON.stringify({
                 type: "discovered_links",
@@ -4050,7 +4102,7 @@ const runParallelProcessing = async () => {
               }));
             }
           }
-          
+
           // Quét sau khi trang load xong
           if (document.readyState === 'complete') {
             scanAndSendLinks();
@@ -4059,7 +4111,7 @@ const runParallelProcessing = async () => {
           }
         })();
       `;
-      
+
         content = (window.strGoogleAds || '') + scanLinksScript;
         url = item.url;
         tabId = `web_${Date.now()}_${index}`;
@@ -4079,27 +4131,27 @@ const runParallelProcessing = async () => {
     } catch (prepareErr) {
       console.error(`[Parallel] ✗ Lỗi chuẩn bị tab ${index + 1}/${batch.length}:`, prepareErr);
     }
-    
+
     // Delay nhỏ giữa các tab (không chặn toàn bộ)
     await delay(2000);
   });
-  
+
   // 7. Chờ tất cả tabs được tạo xong
   const creationResults = await Promise.allSettled(createPromises);
   const rejectedCreations = creationResults.filter(r => r.status === 'rejected').length;
   if (rejectedCreations > 0) {
     console.error(`[Parallel] ❌ Có ${rejectedCreations}/${creationResults.length} promise tạo tab bị reject trước khi hoàn tất`);
   }
-  
+
   // ⏱️ QUAN TRỌNG: CHỜ tất cả tabs tự tắt theo timeout của người dùng
   // Không đổi proxy hay tạo batch tiếp theo cho đến khi tabs đóng hết
   const tabTimeoutMs = (Number(delayTime)||1)*60000+30000; // Timeout của mỗi tab (user setting + 30s buffer)
-  
+
   // ✅ MỚI: Tính timeout thực tế từ API response, không dùng hardcoded
   // Nếu API đã set __getTMProxyNextRequest, dùng nó. Nếu không, fallback sang tabTimeoutMs + 60s
   let safetyTimeoutMs = tabTimeoutMs + 60000; // Default fallback
   let timeoutSource = 'Default (user setting + 90s)';
-  
+
   if (window.__getTMProxyNextRequest && window.__getTMProxyNextRequest > Date.now()) {
     const waitTimeFromApi = window.__getTMProxyNextRequest - Date.now();
     // Timeout = API's next_request time + 30s buffer để chắc chắn tabs có đủ thời gian
@@ -4109,24 +4161,24 @@ const runParallelProcessing = async () => {
   } else {
     console.log(`[Parallel] ⚠️ Không có next_request từ API, dùng timeout mặc định`);
   }
-  
+
   const realCreatedCount = window.TabManager.getActiveTabCount();
   console.log(`[Parallel] ⏰ Đã tạo thực tế ${realCreatedCount}/${batch.length} tabs, chờ chúng tự tắt theo timeout ${Math.round(safetyTimeoutMs/1000)}s (${timeoutSource})...`);
   if (realCreatedCount === 0) {
     console.warn('[Parallel] ⚠️ Không có webview nào được tạo. Kiểm tra vùng mount webview và trạng thái fnCreateTab().');
   }
-  
+
   // SET FLAG: Không cho tạo tabs mới
   window.TabManager.isWaitingForBatchClose = true;
   const batchStartTime = Date.now();
-  
+
   const waitForAllTabsClose = () => {
     return new Promise((resolve) => {
       const checkInterval = setInterval(() => {
         const activeCount = window.TabManager.getActiveTabCount();
         const elapsedMs = Date.now() - batchStartTime;
         const elapsedSecs = Math.round(elapsedMs / 1000);
-        
+
         if (activeCount === 0) {
           // Tất cả tabs đã đóng
           clearInterval(checkInterval);
@@ -4134,13 +4186,13 @@ const runParallelProcessing = async () => {
           resolve(true);
           return;
         }
-        
+
         // Log mỗi 30 giây
         if (elapsedSecs % 30 === 0) {
           console.log(`[Parallel] 🔍 Chờ tabs tắt: còn ${activeCount} tabs chạy (${elapsedSecs}s/${Math.round(safetyTimeoutMs/1000)}s timeout)`);
         }
       }, 10000); // Kiểm tra mỗi 10 giây
-      
+
       // ⏱️ Timeout dựa trên API's next_request (nếu có) hoặc user setting
       // Sử dụng giá trị từ API thay vì hardcoded formula
       setTimeout(() => {
@@ -4151,25 +4203,25 @@ const runParallelProcessing = async () => {
       }, safetyTimeoutMs);
     });
   };
-  
+
   await waitForAllTabsClose();
-  
+
   // RESET FLAG: Cho phép tạo tabs mới cho batch tiếp theo
   window.TabManager.isWaitingForBatchClose = false;
-  
+
   // ⚠️ QUAN TRỌNG: NGAY SAU KHI TABS TẮT HẾT → ĐỔI PROXY IP NGAY
   // Không chờ, gọi fnResetIP() trực tiếp để lấy IP mới
   console.log(`[Parallel] 🔄 ⚡ Tất cả tabs đã tắt, reset proxy IP ngay để lấy IP mới...`);
-  
+
   // Chờ 1 giây cho các process dọn dẹp xong rồi reset IP
   await new Promise(resolve => setTimeout(resolve, 1000));
-  
+
   // ✅ MỚI: Gọi fnResetIP(true) với FORCE mode để bypass throttle check
   // fnResetIP() sẽ gọi getTMProxy() → proxy active → gọi runSequentiallyWithReduce() tự động
   // FORCE = true vì đây là sau khi batch hoàn tất, PHẢI đổi proxy để tiếp tục batch tiếp theo
   console.log(`[Parallel] 📞 Gọi fnResetIP(true) với FORCE mode...`);
   fnResetIP(true);
-  
+
   console.log(`[Parallel] ✅ END runParallelProcessing() - fnResetIP() đã được gọi`);
 };
 
@@ -4329,7 +4381,7 @@ async function activateWindowsProxy(proxyInfo) {
   try {
     // Xử lý proxy info object - extract host:port
     let proxyServer = proxyInfo.https || proxyInfo.proxy;
-    
+
     if (!proxyServer) {
       throw new Error("Không có địa chỉ proxy được cung cấp.");
     }
@@ -4340,52 +4392,52 @@ async function activateWindowsProxy(proxyInfo) {
       console.error('[activateWindowsProxy] Không thể parse proxy URL:', proxyServer);
       return false;
     }
-    
+
     const { host: proxyHost, port: proxyPort } = parsed;
     proxyServer = `${proxyHost}:${proxyPort}`;
-    
+
     console.log(`[activateWindowsProxy] Thiết lập proxy Windows: ${proxyServer}`);
     console.log(`[activateWindowsProxy] Username: ${proxyInfo.username || 'none'}`);
 
     // QUAN TRỌNG: Set ProxyServer cho HTTP và HTTPS riêng
     // Format: "http=host:port;https=host:port"
     const proxyServerFormatted = `http=${proxyHost}:${proxyPort};https=${proxyHost}:${proxyPort}`;
-    
+
     console.log(`[activateWindowsProxy] Registry value: ${proxyServerFormatted}`);
-    
+
     // Đặt địa chỉ proxy
     const set_proxy_cmd = `reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyServer /t REG_SZ /d "${proxyServerFormatted}" /f`;
     console.log(`[activateWindowsProxy] Executing: ${set_proxy_cmd}`);
     await executeCmd(set_proxy_cmd);
-    
+
     // Bật proxy
     const enable_proxy_cmd = `reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable /t REG_DWORD /d 1 /f`;
     console.log(`[activateWindowsProxy] Enabling proxy...`);
     await executeCmd(enable_proxy_cmd);
-    
+
     // QUAN TRỌNG: Set ProxyOverride để không dùng proxy cho localhost
     const bypass_cmd = `reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyOverride /t REG_SZ /d "*.tmproxy.com;<local>" /f`;
     console.log(`[activateWindowsProxy] Setting bypass domains...`);
     await executeCmd(bypass_cmd);
-    
+
     // QUAN TRỌNG: Nếu có credentials, set AutoConfigURL hoặc dùng ProxyUsername/ProxyPassword
     if (proxyInfo.username && proxyInfo.password) {
       // Thử set credentials vào registry (có thể không work trên tất cả Windows versions)
       try {
         const cred_user = `reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyUsername /t REG_SZ /d "${proxyInfo.username}" /f`;
         await executeCmd(cred_user);
-        
+
         const cred_pass = `reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyPassword /t REG_SZ /d "${proxyInfo.password}" /f`;
         await executeCmd(cred_pass);
-        
+
         console.log(`[activateWindowsProxy] Credentials set in registry`);
       } catch (credErr) {
         console.warn(`[activateWindowsProxy] Không thể set credentials qua registry:`, credErr.message);
       }
     }
-    
+
     console.log(`✅ [activateWindowsProxy] Đã kích hoạt proxy trên Windows với địa chỉ: ${proxyServer}`);
-    
+
     // Refresh để áp dụng settings ngay (optional)
     try {
       // Gửi WM_SETTINGCHANGE để notify Windows về thay đổi
@@ -4398,7 +4450,7 @@ async function activateWindowsProxy(proxyInfo) {
         console.warn(`[activateWindowsProxy] Không refresh settings:`, e.message);
       }
     }
-    
+
     return await proxy_status_check();
   } catch (error) {
     console.error('❌ [activateWindowsProxy] Lỗi khi kích hoạt proxy trên Windows:', error.message);
@@ -4410,12 +4462,12 @@ async function activateWindowsProxy(proxyInfo) {
 async function deactivateWindowsProxy() {
   try {
     console.log('[deactivateWindowsProxy] Disabling proxy on Windows...');
-    
+
     // Tắt proxy
     const disable_proxy_cmd = `reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable /t REG_DWORD /d 0 /f`;
     await executeCmd(disable_proxy_cmd);
     console.log('[deactivateWindowsProxy] ProxyEnable set to 0');
-    
+
     // Xóa ProxyServer
     try {
       const delete_server_cmd = `reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyServer /f`;
@@ -4424,7 +4476,7 @@ async function deactivateWindowsProxy() {
     } catch (e) {
       console.warn('[deactivateWindowsProxy] Could not delete ProxyServer:', e.message);
     }
-    
+
     // Xóa ProxyOverride
     try {
       const delete_override_cmd = `reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyOverride /f`;
@@ -4433,7 +4485,7 @@ async function deactivateWindowsProxy() {
     } catch (e) {
       console.warn('[deactivateWindowsProxy] Could not delete ProxyOverride:', e.message);
     }
-    
+
     // Xóa credentials
     try {
       const delete_user_cmd = `reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyUsername /f`;
@@ -4444,7 +4496,7 @@ async function deactivateWindowsProxy() {
     } catch (e) {
       console.warn('[deactivateWindowsProxy] Could not delete credentials:', e.message);
     }
-    
+
     console.log('✅ [deactivateWindowsProxy] Đã hủy kích hoạt proxy trên Windows.');
     return true;
   } catch (error) {
@@ -4458,11 +4510,11 @@ async function checkWindowsProxyStatus() {
   try {
     const output = await executeCmd(proxy_status_query);
     console.log('[checkWindowsProxyStatus] Registry output:', output);
-    
+
     // Reg query sẽ trả về giá trị 0x1 nếu ProxyEnable được bật
     const isEnabled = output.includes('0x1');
     console.log(`[checkWindowsProxyStatus] Proxy status: ${isEnabled ? 'ENABLED' : 'DISABLED'}`);
-    
+
     return isEnabled;
   } catch (error) {
     console.error(`❌ [checkWindowsProxyStatus] Lỗi khi kiểm tra proxy trên Windows: ${error.message}`);
@@ -4486,7 +4538,7 @@ async function activateMacProxy(proxyHost, proxyPort, username, password) {
 
   try {
     console.log(`[activateMacProxy] Thiết lập proxy với: host=${proxyHost}, port=${proxyPort}, service=${serviceName}`);
-    
+
     var httpCommand = `sudo networksetup -setwebproxy "${serviceName}" ${proxyHost} ${proxyPort} On "${username}" "${password}"`;
     console.log('[activateMacProxy] Thực thi HTTP command...');
     await executeCommand(httpCommand, sudoPassword);
@@ -4494,11 +4546,11 @@ async function activateMacProxy(proxyHost, proxyPort, username, password) {
     var httpsCommand = `sudo networksetup -setsecurewebproxy "${serviceName}" ${proxyHost} ${proxyPort} On "${username}" "${password}"`;
     console.log('[activateMacProxy] Thực thi HTTPS command...');
     await executeCommand(httpsCommand, sudoPassword);
-    
+
     var httpCommandEx = `sudo networksetup -setproxybypassdomains "${serviceName}" "*.tmproxy.com" "<local>"`;
     console.log('[activateMacProxy] Thực thi bypass domains command...');
     await executeCommand(httpCommandEx, sudoPassword);
-    
+
     console.log(`✅ [activateMacProxy] Đã kích hoạt proxy cho dịch vụ "${serviceName}" trên macOS.`);
     // return true;
     return await proxy_status_check();
@@ -4547,35 +4599,35 @@ function parseProxyUrl(proxyUrl) {
     console.error('[parseProxyUrl] Invalid proxy URL:', proxyUrl);
     return null;
   }
-  
+
   try {
     // Loại bỏ protocol prefix
     let cleanUrl = proxyUrl.replace(/^(https?|socks\d*):\/\//, '');
-    
+
     // Loại bỏ authentication prefix nếu có (user:pass@host:port)
     cleanUrl = cleanUrl.replace(/^[^@]+@/, '');
-    
+
     // Loại bỏ trailing slashes
     cleanUrl = cleanUrl.replace(/\/$/, '');
-    
+
     // Parse host:port
     const parts = cleanUrl.split(':');
     if (parts.length >= 2) {
       const host = parts[0];
       const port = parts[parts.length - 1]; // Lấy phần cuối là port
-      
+
       // Validate port
       const portNum = parseInt(port, 10);
       if (isNaN(portNum) || portNum < 1 || portNum > 65535) {
         console.error('[parseProxyUrl] Invalid port:', port);
         return null;
       }
-      
+
       if (!host || host.length === 0) {
         console.error('[parseProxyUrl] Empty host');
         return null;
       }
-      
+
       console.log('[parseProxyUrl] ✅ Parsed:', { host, port });
       return { host, port };
     } else if (parts.length === 1) {
@@ -4585,7 +4637,7 @@ function parseProxyUrl(proxyUrl) {
   } catch (e) {
     console.error('[parseProxyUrl] Parsing error:', e.message);
   }
-  
+
   return null;
 }
 
@@ -4594,18 +4646,18 @@ window.proxy_activate = async function (proxyInfo) {
   // Để tránh proxy auth dialog, config ở system level với embedded credentials
   console.log('[proxy_activate] Kích hoạt proxy với credentials:', proxyInfo.username || 'unknown');
   console.log('[proxy_activate] Raw proxy URL:', proxyInfo.https || proxyInfo.proxy);
-  
+
   try {
     if (window.opsys === 'darwin') {
       let proxyUrl = proxyInfo.https || proxyInfo.proxy;
-      
+
       // Parse proxy URL
       const parsed = parseProxyUrl(proxyUrl);
       if (!parsed) {
         console.error('[proxy_activate] Failed to parse proxy URL:', proxyUrl);
         return false;
       }
-      
+
       const { host: proxyHost, port: proxyPort } = parsed;
       console.log(`[proxy_activate] Mac: ${proxyHost}:${proxyPort} with ${proxyInfo.username}`);
       return await activateMacProxy(proxyHost, proxyPort, proxyInfo.username || '', proxyInfo.password || '');
@@ -4915,7 +4967,7 @@ window.fnCreateTab = function (id_tab, url_open, script_code, multi_tab_name, au
         }
     });
     webview.addEventListener('dialog', function (e) {
-        //message type 
+        //message type
         messageType = e.messageType;
         messageText = e.messageText;
         DialogController = e.dialog;
@@ -4988,11 +5040,11 @@ window.fnCreateTab = function (id_tab, url_open, script_code, multi_tab_name, au
                 // Khởi tạo UnifiedLinkManager với dữ liệu từ csmUserData
                 const currentData = window.getDataUserOption();
                 console.log('[ip_changed] Khởi tạo UnifiedLinkManager với', currentData.length, 'links từ csmUserData');
-                
+
                 // Reset và thêm lại dữ liệu mới
                 window.UnifiedLinkManager.reset();
                 window.UnifiedLinkManager.addFromDataUser(currentData);
-                
+
                 // Bắt đầu xử lý song song
                 console.log('[ip_changed] ⚡ Bắt đầu xử lý song song...');
                 setTimeout(() => {
@@ -5016,13 +5068,13 @@ window.fnCreateTab = function (id_tab, url_open, script_code, multi_tab_name, au
               console.log('[discovered_links] Không có links mới từ', message.parentTab);
               return;
             }
-            
+
             // Thêm vào UnifiedLinkManager
             window.UnifiedLinkManager.addFromWebview(message.links, message.parentTab, 2);
-            
+
             const stats = window.UnifiedLinkManager.getStats();
             console.log(`[discovered_links] ✓ Nhận ${message.links.length} links từ ${message.parentTab}. Tổng queue: ${stats.pending}`);
-            
+
             // Kích hoạt xử lý nếu đang chạy
             if (window.isRunning && stats.pending > 0) {
               console.log('[discovered_links] ⚡ Tiếp tục xử lý links...');
@@ -5041,11 +5093,11 @@ window.fnCreateTab = function (id_tab, url_open, script_code, multi_tab_name, au
 
             // Sử dụng UnifiedLinkManager để thêm links vào queue
             window.UnifiedLinkManager.addFromWebview(message.links, message.tabid, message.isRunAds);
-            
+
             // Log stats
             const stats = window.UnifiedLinkManager.getStats();
             console.log(`[message.type=open] ✓ Đã thêm ${message.links.length} links vào queue. Tổng: ${stats.total}, Đã xử lý: ${stats.processed}, Chờ xử lý: ${stats.pending}`);
-            
+
             // ⚠️ QUAN TRỌNG: Chỉ gọi runParallelProcessing nếu không đang chờ batch tắt
             // Nếu đang chờ batch tắt, runParallelProcessing sẽ được gọi tự động sau khi batch tắt
             if (window.isRunning && stats.pending > 0 && !window.TabManager.isWaitingForBatchClose) {
@@ -5071,7 +5123,7 @@ window.fnCreateTab = function (id_tab, url_open, script_code, multi_tab_name, au
             //       `+strOpen;
             //     fnCreateTab(message.tabid,link,content,true,document.querySelector('#sophut_lamtuoi').value*120000);
             //   }
-            // }); 
+            // });
           }
           else if (message.type === "save") {
             console.log('[message.save] Received save event:', JSON.stringify({ gTop: message.gTop, tu_khoa: message.tu_khoa, link_check: message.link_check, isRunAds: message.isRunAds }));
@@ -5191,7 +5243,7 @@ window.fnCreateTab = function (id_tab, url_open, script_code, multi_tab_name, au
         console.log(`[loadstop] Phát hiện captcha gooogle phải tắt tab ${id_tab}`);
         if (typeof fnRemoveTab === 'function') fnRemoveTab(id_tab);
       }
-      
+
       // ❌ XÓA TIMEOUT Ở ĐÂY - loadstop có thể trigger nhiều lần (mỗi redirect)
       // Timeout sẽ được set MỘT LẦN DUY NHẤT khi tạo tab (xem phía dưới)
       // if (auto_close && auto_close > 0) {
@@ -5201,17 +5253,17 @@ window.fnCreateTab = function (id_tab, url_open, script_code, multi_tab_name, au
       //   }, auto_close + 5000);
       // }
     });
-    
+
     // Gán proxy context hiện tại cho webview mới
     window.registerWebviewProxyState('U_' + id_tab);
 
     // Append webview vào content
     content.appendChild(webview);
-    
+
     // Append header và content vào panelItem
     panelItem.appendChild(header);
     panelItem.appendChild(content);
-    
+
     // Append panelItem vào webviewContainer (không phải #context-auto .card-body)
     webviewContainer.appendChild(panelItem);
     console.log('[fnCreateTab] ✅ Appended webview', {
@@ -5219,7 +5271,7 @@ window.fnCreateTab = function (id_tab, url_open, script_code, multi_tab_name, au
       webviewCount: document.querySelectorAll('webview[id^="U_"]').length,
       idPrefixCount: document.querySelectorAll('[id^="U_"]').length
     });
-    
+
     // ⏰ QUAN TRỌNG: Set timeout fallback MỘT LẦN DUY NHẤT ngay sau khi tạo tab
     // Timeout này KHÔNG bị ảnh hưởng bởi loadstop/redirect events
     if (auto_close && auto_close > 0) {
@@ -5227,12 +5279,12 @@ window.fnCreateTab = function (id_tab, url_open, script_code, multi_tab_name, au
         console.log(`[fnCreateTab] ⏰ FALLBACK: Tự động đóng tab ${id_tab} sau ${Math.round(auto_close / 1000)}s (timeout được set khi tạo tab)`);
         if (typeof fnRemoveTab === 'function') fnRemoveTab(id_tab);
       }, auto_close + 5000); // +5s buffer để webview script có thời gian gửi close signal
-      
+
       // Lưu timeout ID vào webview element để có thể clear nếu cần
       if (webview) webview.dataset.autoCloseTimeoutId = tabTimeoutId;
       console.log(`[fnCreateTab] ⏰ Đã set fallback timeout cho tab ${id_tab}: ${Math.round((auto_close + 5000) / 1000)}s (Timeout ID: ${tabTimeoutId})`);
     }
-    
+
     // console.log("Tao Xong tab",id_tab);
     setTimeout(function () {
         if (document.querySelector('#U_' + id_tab))
@@ -5336,7 +5388,7 @@ function mainAppCode() {
     };
   }
 
-  // const gui = require('nw.gui'); 
+  // const gui = require('nw.gui');
   // gui.App.clearCache();
   // fnClearCache();
   window.save = function (message) {
@@ -5437,7 +5489,7 @@ function mainAppCode() {
     // QUAN TRỌNG: Cache chỉ valid trong thời gian < GET_TM_PROXY_MIN_INTERVAL
     const cacheAge = window.__getTMProxyRequestPool ? (now - window.__getTMProxyRequestPool.timestamp) : Infinity;
     const isCacheValid = cacheAge < GET_TM_PROXY_MIN_INTERVAL;
-    
+
     if (window.__getTMProxyRequestPool && isCacheValid) {
       console.log("✅ getTMProxy: Reusing cached proxy result (" + Math.ceil(cacheAge/1000) + "s old, valid for " + Math.ceil((GET_TM_PROXY_MIN_INTERVAL - cacheAge)/1000) + "s more)");
       fn(window.__getTMProxyRequestPool.data);
@@ -5481,7 +5533,7 @@ function mainAppCode() {
       }, delay);
       return;
     }
-    
+
     // Nếu cache đã hết hạn, cho phép gọi API ngay lập tức
     if (!isCacheValid) {
       console.log("🔄 Cache đã hết hạn (" + Math.ceil(cacheAge/1000) + "s old), gọi API lấy proxy mới ngay");
@@ -5585,7 +5637,7 @@ function mainAppCode() {
   window.fetchWithTimeout = function(url, options, timeout) {
     return Promise.race([
       fetch(url, options),
-      new Promise((_, reject) => 
+      new Promise((_, reject) =>
         setTimeout(() => reject(new Error('Fetch timeout')), timeout)
       )
     ]);
@@ -5596,7 +5648,7 @@ function mainAppCode() {
     try {
       return await Promise.race([
         getAvailableProxies(api_token, location),
-        new Promise((_, reject) => 
+        new Promise((_, reject) =>
           setTimeout(() => reject(new Error('getAvailableProxies timeout')), window.PROXY_CONFIG.READ_TIMEOUT)
         )
       ]);
@@ -5611,13 +5663,13 @@ function mainAppCode() {
             return false;
 
       window.unregisterWebviewProxyState('U_' + id_tab);
-        
+
         console.log(`[fnRemoveTab] 🗑️ Bắt đầu đóng tab và xóa toàn bộ dữ liệu: ${id_tab}`);
-        
+
         // 1. Lấy reference webview và partition info
         const webview = document.querySelector('#U_' + id_tab);
         let partitionId = null;
-        
+
         if (webview) {
             // Lấy partition ID từ webview attribute
             const partition = webview.getAttribute('partition');
@@ -5625,9 +5677,9 @@ function mainAppCode() {
                 partitionId = partition.replace('persist:', '');
                 console.log(`[fnRemoveTab] 📦 Partition ID: ${partitionId}`);
             }
-            
+
             const webviewId = 'U_' + id_tab;
-            
+
             // BƯỚC 1: Stop tất cả hoạt động của webview
             console.log(`[fnRemoveTab] ⏹️ Stop webview...`);
             try {
@@ -5640,7 +5692,7 @@ function mainAppCode() {
             } catch (stopErr) {
                 console.warn(`[fnRemoveTab] ⚠️ Lỗi khi stop webview:`, stopErr.message);
             }
-            
+
             // BƯỚC 2: Clear toàn bộ browsing data NGAY LẬP TỨC (cả in-memory và disk)
             // Sử dụng getStoragePartition() + clearData() theo NW.js API
             console.log(`[fnRemoveTab] 🧹 Xóa browsing data CỦA WEBVIEW...`);
@@ -5687,16 +5739,16 @@ function mainAppCode() {
             } catch (clearErr) {
                 console.warn(`[fnRemoveTab] ⚠️ Lỗi clearData:`, clearErr.message);
             }
-            
+
             // BƯỚC 3: Remove tất cả event listeners
             console.log(`[fnRemoveTab] 🔌 Remove event listeners...`);
             try {
                 // Tạo empty handler để remove
                 const emptyHandler = function() {};
-                const events = ['did-fail-load', 'dom-ready', 'exit', 'dialog', 'consolemessage', 
+                const events = ['did-fail-load', 'dom-ready', 'exit', 'dialog', 'consolemessage',
                                'loadabort', 'loadstop', 'loadstart', 'loadcommit', 'contentload',
                                'close', 'crashed', 'destroyed', 'newwindow', 'permissionrequest'];
-                
+
                 events.forEach(eventName => {
                     try {
                         webview.removeEventListener(eventName, emptyHandler);
@@ -5705,7 +5757,7 @@ function mainAppCode() {
             } catch (eventErr) {
                 console.warn(`[fnRemoveTab] ⚠️ Lỗi remove listeners:`, eventErr.message);
             }
-            
+
             // BƯỚC 4: Terminate webview process (quan trọng!)
             console.log(`[fnRemoveTab] 💀 Terminate webview process...`);
             try {
@@ -5716,11 +5768,11 @@ function mainAppCode() {
             } catch (termErr) {
                 console.warn(`[fnRemoveTab] ⚠️ Lỗi terminate:`, termErr.message);
             }
-            
+
             // BƯỚC 5: Remove DOM element
             console.log(`[fnRemoveTab] 🗑️ Remove DOM element...`);
             webview.remove();
-            
+
             // BƯỚC 6: Gọi fnClearWebviewCache để xóa partition storage files
             console.log(`[fnRemoveTab] 🧹 Xóa partition storage files...`);
             if (typeof fnClearWebviewCache === 'function') {
@@ -5731,36 +5783,36 @@ function mainAppCode() {
                 }, 500);
             }
         }
-        
+
         // 2. Xóa panelItem (container chứa header, content, webview)
         const panelItem = document.querySelector('#' + id_tab);
         if (panelItem) {
             console.log(`[fnRemoveTab] 🗑️ Remove panel container...`);
-            
+
             // Remove close button listener
             const closeBtn = panelItem.querySelector('button');
             if (closeBtn) {
                 const clone = closeBtn.cloneNode(true);
                 closeBtn.parentNode.replaceChild(clone, closeBtn);
             }
-            
+
             // Remove toàn bộ panelItem
             panelItem.remove();
             console.log(`[fnRemoveTab] ✅ Removed panel container`);
         }
-        
+
         // 3. Fallback: Remove theo selector cũ (backward compatibility)
         const oldStylePanel = document.querySelector('#context-auto .card-body #' + id_tab);
         if (oldStylePanel) {
             oldStylePanel.remove();
         }
-        
+
         // 4. Clean up global references
         console.log(`[fnRemoveTab] 🧹 Clean up global references...`);
         if (window[`customTabListeners_${id_tab}`]) {
             delete window[`customTabListeners_${id_tab}`];
         }
-        
+
         // 5. Xóa thư mục partition storage files từ filesystem (nếu có partitionId)
         if (partitionId && window.hasOwnProperty('process')) {
             setTimeout(() => {
@@ -5768,10 +5820,10 @@ function mainAppCode() {
                     const fs = require('fs');
                     const Path = require('path');
                     const gui = require('nw.gui');
-                    
+
                     const userDataPath = gui.App.dataPath;
                     const storagePath = Path.join(userDataPath, 'Default', 'Storage', 'ext', partitionId);
-                    
+
                     if (fs.existsSync(storagePath)) {
                         console.log(`[fnRemoveTab] 🗑️ Xóa thư mục Storage/ext/${partitionId}...`);
                         deleteFolderRecursive(storagePath);
@@ -5782,22 +5834,22 @@ function mainAppCode() {
                 }
             }, 1000); // Delay 1s để đảm bảo process đã dừng hoàn toàn
         }
-        
+
         // Cập nhật TabManager nếu đang dùng
         if (window.TabManager && typeof window.TabManager.removeTab === 'function') {
             window.TabManager.removeTab(id_tab);
         }
-        
+
         console.log(`[fnRemoveTab] ✅ Hoàn tất đóng tab và xóa toàn bộ dữ liệu: ${id_tab}`);
-        
+
     } catch (err) {
         console.error(`[fnRemoveTab] ❌ Lỗi nghiêm trọng khi đóng tab ${id_tab}:`, err.message, err.stack);
-        
+
         // CRITICAL RETRY: Đảm bảo ít nhất DOM element bị xóa
         setTimeout(() => {
             try {
                 console.log(`[fnRemoveTab] 🔄 Retry cleanup cho ${id_tab}...`);
-                
+
                 const webview = document.querySelector('#U_' + id_tab);
                 if (webview) {
                     try {
@@ -5806,10 +5858,10 @@ function mainAppCode() {
                     } catch(e) {}
                     webview.remove();
                 }
-                
+
                 const panel = document.querySelector('#' + id_tab);
                 if (panel) panel.remove();
-                
+
                 console.log(`[fnRemoveTab] ✅ Retry cleanup thành công`);
             } catch (retryErr) {
                 console.error(`[fnRemoveTab] ❌ Retry cleanup thất bại:`, retryErr.message);
@@ -6193,10 +6245,10 @@ function mainAppCode() {
   window.isRunning = false;
   window.stopApp = function (cleanupTabs = true) {
     console.log('[stopApp] ⏸️ Dừng app...');
-    
+
     isRunning = false;
     window.isRunning = false;
-    
+
     // 1. Stop interval tạo tab mới
     if (window.tmRun) {
       clearInterval(window.tmRun);
@@ -6206,18 +6258,18 @@ function mainAppCode() {
 
     window.stopRuntimeDiagnosticsHeartbeat();
     window.stopTempPartitionJanitor();
-    
+
     // Dừng health monitor
     window.stopWebviewHealthMonitor();
     console.log('[stopApp] 🏥 Đã dừng webview health monitor');
-    
+
     // 2. Lưu lại trạng thái UnifiedLinkManager và TabManager
     const stats = window.UnifiedLinkManager.getStats();
     const tabStats = window.TabManager.getStats();
     console.log(`[stopApp] 📊 Tiến độ: ${stats.processed}/${stats.total} (${stats.progress}%)`);
     console.log(`[stopApp] 📊 Còn lại: ${stats.pending} links chưa xử lý`);
     console.log(`[stopApp] 📊 Tabs: ${tabStats.active}/${tabStats.max} đang chạy`);
-    
+
     // 3. TẮT PROXY NGAY LẬP TỨC (trước khi đóng tabs)
     console.log('[stopApp] 🔌 Tắt proxy...');
     if (window.__isProxyActive) {
@@ -6232,7 +6284,7 @@ function mainAppCode() {
     } else {
       console.log('[stopApp] ℹ️ Proxy đã tắt sẵn');
     }
-    
+
     // 4. Đóng tất cả tabs và cleanup
     if (cleanupTabs && tabStats.active > 0) {
       console.log('[stopApp] 🗑️ Đóng tất cả tabs và cleanup...');
@@ -6240,7 +6292,7 @@ function mainAppCode() {
     } else if (cleanupTabs) {
       console.log('[stopApp] ℹ️ Không có tabs để đóng');
     }
-    
+
     // 5. Update UI
     try {
       document.getElementById("btnStop").style.display = 'none';
@@ -6248,12 +6300,12 @@ function mainAppCode() {
     } catch (e) {
       console.warn('[stopApp] ⚠️ Error updating UI:', e.message);
     }
-    
+
     console.log('[stopApp] ✅ Đã dừng app' + (cleanupTabs ? ' và cleanup tabs' : ' (giữ tabs đang chạy)'));
   }
   window.open_links = [];
   window.__lastResetIPTime = 0;
-  
+
   window.runApp = function () {
     open_links = [];
     isRunning = true;
@@ -6268,20 +6320,20 @@ function mainAppCode() {
         totalLinks: Array.isArray(window.dataUserOption) ? window.dataUserOption.length : 0
       });
     }
-    
+
     // Bắt đầu health monitoring cho webviews
     window.startWebviewHealthMonitor();
     console.log('🏥 Đã bật webview health monitor');
-    
+
     // Reset và load dữ liệu vào UnifiedLinkManager
     const currentData = window.getDataUserOption();
     console.log('[runApp] 🚀 Khởi tạo UnifiedLinkManager với', currentData.length, 'links');
     window.UnifiedLinkManager.reset();
-    
+
     if (currentData.length > 0) {
       window.UnifiedLinkManager.addFromDataUser(currentData);
     }
-    
+
     // Hiển thị stats
     const stats = window.UnifiedLinkManager.getStats();
     const tabStats = window.TabManager.getStats();
@@ -6290,10 +6342,10 @@ function mainAppCode() {
     console.log(`[runApp] 🚀 Giới hạn: Tối đa ${tabStats.max} tabs cùng lúc`);
     console.log(`[runApp] ⏰ Thời gian mỗi tab: ${sophutLamtuoi} phút`);
     console.log(`[runApp] 🔄 Proxy sẽ xoay vòng sau mỗi 3 "trang" (3 x ${tabStats.max} tabs)`);
-    
+
     document.getElementById("btnStart").style.display = 'none';
     document.getElementById("btnStop").style.display = 'block';
-    
+
     // QUAN TRỌNG: KHÔNG mở tabs ngay, phải lấy proxy trước
     console.log('[runApp] ⏳ Kiểm tra trạng thái proxy...');
     if (!window.__isProxyActive) {
@@ -6309,11 +6361,11 @@ function mainAppCode() {
         }, 1000);
       }
     }
-    
+
     window.tmRun = setInterval(function () {
       if (!navigator.onLine)
         return;
-        
+
       // QUAN TRỌNG: Kiểm tra xem có cần đổi proxy theo sophut_lamtuoi không
       if (window.shouldChangeProxyNow()) {
         const sophutLamtuoi = getStayMinutes();
@@ -6322,10 +6374,10 @@ function mainAppCode() {
 
         if (activeTabs > 0) {
           console.log(`⏰ [tmRun] Đã đến thời điểm đổi proxy (${elapsed}/${sophutLamtuoi} phút). Đóng tất cả tabs và đổi proxy mới...`);
-          
+
           // Đóng tất cả tabs bằng helper function
           closeAllTabsAndCleanup(`Đổi proxy sau ${elapsed} phút`);
-          
+
           // Trigger đổi proxy (fnResetIP sẽ được gọi khi không còn tab)
           window.__batchStartTime = 0; // Reset để fnResetIP biết cần lấy proxy mới
           return;
@@ -6343,7 +6395,7 @@ function mainAppCode() {
         }
         return;
       }
-      
+
       document.querySelectorAll('[onclick^="fnRemove"]').forEach(function (el) {
         if (el.parentNode) {
           var tab_id = el.parentNode.getAttribute("id");
@@ -6353,7 +6405,7 @@ function mainAppCode() {
                 el.parentNode.parentNode.parentNode.remove();
         }
       });
-      
+
       // Chỉ gọi fnResetIP mỗi 5 giây, tránh spam
       const now = Date.now();
       if (document.querySelectorAll('[id^="U_"]').length === 0) {
@@ -6544,7 +6596,7 @@ function mainAppCode() {
             console.error('[beforeImport] ERROR: items is not an array!');
             return [];
           }
-          
+
           if (items.length === 0) {
             console.warn('[beforeImport] WARNING: Empty import data');
             return [];
@@ -6582,7 +6634,7 @@ function mainAppCode() {
             .map((item, idx) => {
               // Priority: tên cột -> fallback vị trí cột
               const tu_khoa = (
-                item.tu_khoa || item['từ khóa'] || item['Từ khóa'] || 
+                item.tu_khoa || item['từ khóa'] || item['Từ khóa'] ||
                 item.keyword || item['Keyword'] || pickByPosition(item, posTuKhoa)
               );
               const domain_or_link = (
@@ -6591,7 +6643,7 @@ function mainAppCode() {
                 pickByPosition(item, posDomain)
               );
               const gtop = (
-                item.gtop || item['vị trí'] || item['Vị trí'] || 
+                item.gtop || item['vị trí'] || item['Vị trí'] ||
                 item.position || item.rank || pickByPosition(item, posGtop)
               );
               const kieu_chay = mapKieuChay(

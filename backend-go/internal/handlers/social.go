@@ -254,16 +254,16 @@ func (h *SocialHandler) HandleFacebookMe(params map[string]any) *model.StandardR
 
 func (h *SocialHandler) HandleFacebookExchangeToken(params map[string]any) *model.StandardResponse {
 	token := paramStr(params, "accessToken")
-	clientID := paramStr(params, "clientId")
-	appSecret := paramStr(params, "appSecret")
+	clientID := strings.TrimSpace(h.cfg.Facebook.AppID)
+	appSecret := strings.TrimSpace(h.cfg.Facebook.AppSecret)
 	if token == "" {
 		return fbErr(400, "Missing accessToken")
 	}
 	if clientID == "" {
-		return fbErr(400, "Missing clientId")
+		return fbErr(503, "Facebook app ID is not configured on server")
 	}
 	if appSecret == "" {
-		return fbErr(400, "Missing appSecret")
+		return fbErr(503, "Facebook app secret is not configured on server")
 	}
 	u := fmt.Sprintf("%s/oauth/access_token?grant_type=fb_exchange_token&client_id=%s&client_secret=%s&fb_exchange_token=%s",
 		fbGraphBase, url.QueryEscape(clientID), url.QueryEscape(appSecret), url.QueryEscape(token))

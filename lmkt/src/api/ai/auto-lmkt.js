@@ -20,6 +20,177 @@ if (typeof window !== 'undefined') {
 
 // ========== I18N SUPPORT - MULTI-LANGUAGE UI ==========
 // Translation dictionary for 3 languages (vi, en, zh)
+
+function generateUuid() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
+
+class Agent {
+  constructor() {
+    this.id = generateUuid();
+    this.version = '1.0';
+    this.name = 'LMKT-AI-Agent';
+    this.status = 'active';
+    this.skills = [];
+    this.allowedTools = [];
+    this.deniedDataTags = [];
+    
+    // Model Policy
+    this.modelPolicy = {
+      preferred: 'local',
+      minimumQuality: 'high',
+      cloudAllowed: false,
+      maxInputTokens: 4000,
+      maxOutputTokens: 2000,
+      maxCostUsd: 0.05
+    };
+    
+    // Execution Policy
+    this.executionPolicy = {
+      maxSteps: 10,
+      maxRetries: 3,
+      timeoutMs: 30000,
+      humanApprovalFor: ['delete', 'update']
+    };
+    
+    // Memory Policy
+    this.memoryPolicy = {
+      scopes: ['session', 'task'],
+      retentionDays: 7,
+      learnFromAcceptedOnly: true
+    };
+  }
+  
+  async executeTask(task) {
+    // Step 1: Validate input and initialize context
+    const context = {
+      taskId: generateUuid(),
+      startTime: Date.now(),
+      currentStep: 1,
+      artifacts: {}
+    };
+    
+    // Step 2: Parse requirements
+    const requirements = this.parseRequirements(task);
+    
+    // Step 3: Create coverage matrix
+    const coverage = this.createCoverageMatrix(requirements);
+    
+    // Step 4: Generate execution plan
+    const plan = this.generatePlan(requirements);
+    
+    // Step 5: Execute plan steps
+    for (const step of plan.steps) {
+      context.currentStep = step.id;
+      await this.executeStep(step, context);
+      
+      // Check execution policy
+      if (context.stepsExecuted >= this.executionPolicy.maxSteps) {
+        throw new Error('Max steps reached');
+      }
+    }
+    
+    // Step 6: Verify outputs
+    const verification = await this.verifyOutputs(context);
+    
+    // Step 7: Check coverage
+    const coverageResult = this.checkCoverage(coverage, verification);
+    
+    // Step 8: Handle artifacts
+    await this.handleArtifacts(context, coverageResult);
+    
+    // Step 9: Update memory
+    if (this.memoryPolicy.learnFromAcceptedOnly && verification.success) {
+      await this.updateMemory(context);
+    }
+    
+    // Step 10: Return final result
+    return {
+      success: verification.success,
+      coverage: coverageResult,
+      artifacts: context.artifacts,
+      stats: {
+        duration: Date.now() - context.startTime,
+        steps: context.stepsExecuted
+      }
+    };
+  }
+  
+  parseRequirements(task) {
+    // Implementation for parsing requirements
+    return {
+      id: generateUuid(),
+      description: task.description,
+      acceptanceCriteria: task.criteria
+    };
+  }
+  
+  createCoverageMatrix(requirements) {
+    // Implementation for coverage matrix
+    return {
+      requirements: [requirements],
+      covered: false
+    };
+  }
+  
+  generatePlan(requirements) {
+    // Implementation for plan generation
+    return {
+      id: generateUuid(),
+      steps: [
+        { id: 1, type: 'parse', tool: 'parser' },
+        { id: 2, type: 'validate', tool: 'validator' }
+      ]
+    };
+  }
+  
+  async executeStep(step, context) {
+    // Implementation for step execution
+    context.stepsExecuted = (context.stepsExecuted || 0) + 1;
+    
+    // Add actual step execution logic here
+    // ...
+  }
+  
+  async verifyOutputs(context) {
+    // Implementation for output verification
+    return {
+      success: true,
+      evidence: {}
+    };
+  }
+  
+  checkCoverage(coverage, verification) {
+    // Implementation for coverage check
+    return {
+      complete: verification.success,
+      requirements: coverage.requirements.map(req => ({
+        id: req.id,
+        passed: verification.success,
+        evidence: verification.evidence
+      }))
+    };
+  }
+  
+  async handleArtifacts(context, coverageResult) {
+    // Implementation for artifact handling
+    context.artifacts.coverage = coverageResult;
+  }
+  
+  async updateMemory(context) {
+    // Implementation for memory update
+    if (this.memoryPolicy.scopes.includes('task')) {
+      // Store task-level memory
+    }
+  }
+}
+
+const agent = new Agent();
+
 const uiTranslations = {
   vi: {
     domain: 'Tên miền:',
@@ -9133,15 +9304,7 @@ async function processContent(item, opts = {}) {
   
   let result;
   let seo;
-  let aiTimeoutId = null;
   try {
-    // 🟢 TIMEOUT SAFETY: Đăng ký timeout vào timerRegistry để đảm bảo cleanup
-    const aiTimeoutMs = 20 * 60 * 1000;
-    aiTimeoutId = setTimeout(() => {
-      console.error(`⏱️ [processContent] AI timeout sau ${aiTimeoutMs}ms`);
-    }, aiTimeoutMs);
-    timerRegistry.register('processContent_ai_' + Date.now(), aiTimeoutId, 'timeout');
-    
     const startAI = Date.now();
     const oneShotPayload = useSeoOneShot ? {
       industry,
@@ -9153,16 +9316,32 @@ async function processContent(item, opts = {}) {
       seed: uniqueSeed.replace(/[\[\]]/g, '')
     } : null;
 
-    const seoInvoke = useSeoOneShot
-      ? await invokeSeoAiLocal(ctx, { useSeoOneShot: true, seoContext: oneShotPayload, expect: "article" })
-      : await invokeSeoAiLocal(ctx, { prompt, expect: "article" });
+    let seoInvoke;
+    try {
+      seoInvoke = useSeoOneShot
+        ? await invokeSeoAiLocal(ctx, { useSeoOneShot: true, seoContext: oneShotPayload, expect: "article" })
+        : await invokeSeoAiLocal(ctx, { prompt, expect: "article" });
+    } catch (firstError) {
+      if (!useSeoOneShot) {
+        throw firstError;
+      }
+
+      // Fallback tương thích backend-go cũ hoặc lane one-shot lỗi timeout/network.
+      console.warn(`⚠️ [processContent] SEO one-shot thất bại, fallback sang prompt classic: ${firstError?.message || firstError}`);
+      const fallbackPrompt = getAntiAIPrompt(industry, content, articleHistory, {
+        domainKey,
+        ...opts
+      }, imagesToPrompt, uniqueSeed);
+      seoInvoke = await invokeSeoAiLocal(ctx, { prompt: fallbackPrompt, expect: "article", useSeoOneShot: false });
+    }
+
     result = seoInvoke.api;
     if (!seoInvoke.ok) {
       throw new Error(seoInvoke.error || seoLaneFailureMessage(result));
     }
     seo = seoInvoke.payload;
     const durationAI = ((Date.now() - startAI) / 1000).toFixed(1);
-    
+
     console.log(`[processContent] ✅ AI trả về - Mất ${durationAI}s - ${new Date().toLocaleTimeString()}`);
     console.log(`[DEBUG] AI Result:`, result);
     console.log(`[DEBUG] result.success:`, result?.success);
@@ -9170,10 +9349,6 @@ async function processContent(item, opts = {}) {
     console.log(`[DEBUG] result.result:`, result?.result);
     console.log(`[DEBUG] result.data:`, result?.data);
   } catch (aiError) {
-    // 🟢 CLEANUP: Xóa timeout nếu có lỗi
-    if (aiTimeoutId) {
-      timerRegistry.clear('processContent_ai_' + (aiTimeoutId.toString().match(/\d+/) || [Date.now()])[0]);
-    }
     const aiStatus = extractHttpStatusFromError(aiError);
     if ([401, 403, 404, 429, 500, 502, 503, 504].includes(aiStatus)) {
       activateBackendGuard(`AI API lỗi ${aiStatus}`, 2 * 60 * 1000);
@@ -11372,7 +11547,12 @@ async function callSeoPromptDirect(ctx, prompt) {
   return api;
 }
 
-/** Client SEO timeout: 0 = chờ đến khi server trả (nginx 86400s). Set window.__CSM_AI_SEO_TIMEOUT_MS nếu cần giới hạn. */
+/**
+ * Client SEO timeout (ms).
+ * - window.__CSM_AI_SEO_TIMEOUT_MS = 0  => chờ không giới hạn
+ * - > 0                                  => dùng giá trị cấu hình
+ * - mặc định                              => 8 phút để tránh pending vô hạn ở trình duyệt
+ */
 function resolveSeoClientTimeoutMs() {
   if (typeof window !== "undefined") {
     const v = window.__CSM_AI_SEO_TIMEOUT_MS;
@@ -11380,7 +11560,7 @@ function resolveSeoClientTimeoutMs() {
     const n = Number(v);
     if (Number.isFinite(n) && n > 0) return n;
   }
-  return 0;
+  return 8 * 60 * 1000;
 }
 
 function buildSeoPromptFallbackFromOneShotContext(seoContext = {}) {
@@ -11410,7 +11590,7 @@ function buildSeoPromptFallbackFromOneShotContext(seoContext = {}) {
  * POST /ai-generate-seo-content — ưu tiên window.csmAI (ky, cùng auth get-table-data).
  * Fallback raw fetch chỉ khi chạy ngoài admin SPA (không có csmAI bridge).
  */
-async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, prompt, attachments }) {
+async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, prompt, attachments, responseContract = "article" }) {
   const safeCtx = ctx && (ctx.apiBase !== undefined || ctx.seftObj) ? ctx : resolveContext();
   const helperAi = resolveSeoKyClient(safeCtx);
 
@@ -11424,12 +11604,16 @@ async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, p
       ? String(prompt || "").trim() || buildSeoPromptFallbackFromOneShotContext(oneShotPayload || {})
       : String(prompt || "").trim();
     if (useSeoOneShot && oneShotPayload && typeof helperAi.generateSeoAntiAiOneShot === "function") {
-      result = await helperAi.generateSeoAntiAiOneShot(oneShotPayload, { taskType: "seo_content" });
+      result = await helperAi.generateSeoAntiAiOneShot(oneShotPayload, { taskType: "seo_content", responseContract });
     } else if (typeof helperAi.generateSeoContentWithPrompt === "function") {
       if (!fallbackPrompt) {
         throw new Error("Thiếu prompt fallback cho SEO one-shot khi helper không hỗ trợ generateSeoAntiAiOneShot");
       }
-      result = await helperAi.generateSeoContentWithPrompt(fallbackPrompt, { taskType: "seo_content", attachments });
+      result = await helperAi.generateSeoContentWithPrompt(fallbackPrompt, {
+        taskType: responseContract === "json" ? "json" : "seo_content",
+        responseContract,
+        attachments
+      });
     } else if (typeof helperAi.csm_ai_generate_seo_content === "function") {
       if (!fallbackPrompt) {
         throw new Error("Thiếu prompt fallback cho SEO one-shot khi helper không hỗ trợ generateSeoAntiAiOneShot");
@@ -11444,7 +11628,12 @@ async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, p
     return result;
   }
 
-  const body = { mode: "sync", async: false, taskType: "seo_content" };
+  const body = {
+    mode: "sync",
+    async: false,
+    taskType: responseContract === "json" ? "json" : "seo_content",
+    responseContract
+  };
   if (Array.isArray(attachments) && attachments.length > 0) body.attachments = attachments;
   if (useSeoOneShot) {
     body.seoPipeline = "anti_ai_one_shot";
@@ -11503,9 +11692,31 @@ async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, p
         }
         return data;
       } catch (fetchErr) {
-        if (fetchErr && fetchErr.name === "AbortError" && timeoutMs > 0) {
-          throw new Error(`SEO timeout sau ${Math.round(timeoutMs / 60000)} phút — đặt window.__CSM_AI_SEO_TIMEOUT_MS=0 để chờ không giới hạn`);
+        const isAbort = fetchErr && fetchErr.name === "AbortError";
+        const errMsg = String(fetchErr?.message || "");
+        const isNetworkError = /failed to fetch|networkerror|load failed|network request failed/i.test(errMsg);
+
+        if (isAbort && timeoutMs > 0) {
+          lastError = new Error(
+            `SEO timeout sau ${Math.round(timeoutMs / 60000)} phút tại ${url} (attempt ${attempt}/2). `
+            + `Có thể backend-go/LLM đang bận; thử lại hoặc đặt window.__CSM_AI_SEO_TIMEOUT_MS=0 nếu muốn chờ không giới hạn.`
+          );
+          if (attempt < 2) {
+            await new Promise((resolve) => setTimeout(resolve, 600 * attempt));
+            continue;
+          }
+          break;
         }
+
+        if (isNetworkError) {
+          lastError = new Error(`Network lỗi khi gọi SEO API (${url}): ${errMsg || "Failed to fetch"}`);
+          if (attempt < 2) {
+            await new Promise((resolve) => setTimeout(resolve, 600 * attempt));
+            continue;
+          }
+          break;
+        }
+
         const status = extractHttpStatusFromError(fetchErr);
         if (status === 404) {
           lastError = fetchErr;
@@ -11620,6 +11831,7 @@ async function invokeSeoAiLocal(ctx, opts = {}) {
     oneShotPayload,
     prompt: useSeoOneShot ? null : prompt,
     attachments: opts.attachments,
+    responseContract: expect === "json" ? "json" : "article",
   });
 
   if (expect === "api") {
@@ -23234,7 +23446,7 @@ ensureServiceContentUI();
  * 
  * Facebook App Credentials:
  * - App ID: 1191294726073360
- * - App Secret: 78a9c32514f789e4f0219aba33d44c08
+ * - App Secret: configured only on backend via FACEBOOK_APP_SECRET
  * - Display Name: CSM-AUTOPOST
  * 
  * Quy trình:
@@ -23247,7 +23459,6 @@ ensureServiceContentUI();
 // ===== FACEBOOK CONFIG =====
 const FACEBOOK_CONFIG = {
   APP_ID: '1191294726073360',
-  APP_SECRET: '78a9c32514f789e4f0219aba33d44c08',
   DISPLAY_NAME: 'CSM',
   GRAPH_API_VERSION: 'v18.0',
   GRAPH_API_BASE: 'https://graph.facebook.com/v18.0'
@@ -25025,7 +25236,7 @@ async function handleManualToken() {
     
     let longLivedToken = token;
     let userAccessToken = token; // Lưu để có thể re-exchange sau 60 ngày
-    const exchangeRes = await seft.facebookExchangeToken(token, FACEBOOK_CONFIG.APP_ID, FACEBOOK_CONFIG.APP_SECRET);
+    const exchangeRes = await seft.facebookExchangeToken(token);
     if (exchangeRes?.success && exchangeRes?.data?.access_token) {
       longLivedToken = exchangeRes.data.access_token;
       userAccessToken = longLivedToken; // Update user token

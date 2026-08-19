@@ -12006,6 +12006,21 @@
 
           var hitBatchRows = Array.isArray(hitBatchPack.pickBatch) ? hitBatchPack.pickBatch.slice() : [];
           if (hasLegacySlrAutoTongHopFilter(thFilterCfg)) {
+            var mainHitRow = hitBatchRows.filter(function (pickRow) {
+              return !isLegacySlrAutoTongHopDd3Row(pickRow);
+            })[0] || null;
+            var dd3HitRows = hitBatchRows.filter(isLegacySlrAutoTongHopDd3Row);
+            var hasDd3SpecificFilterHit = thFilterCfg.minNgayCx3Nb !== null
+              || thFilterCfg.maxKtnLast !== null
+              || thFilterCfg.minZeroWeek !== null;
+            var dd3SpecificPassHit = !hasDd3SpecificFilterHit || dd3HitRows.some(function (pickRow) {
+              return passLegacySlrAutoTongHopDd3NbFilter(pickRow, thFilterCfg);
+            });
+            var mainHitRowPasses = (!mainHitRow || passLegacySlrAutoTongHopExtraFilter(mainHitRow, thFilterCfg)) && dd3SpecificPassHit;
+            if (!mainHitRowPasses) {
+              filteredOutCount += 1;
+              continue;
+            }
             hitBatchRows = hitBatchRows.filter(function (pickRow) {
               return passLegacySlrAutoTongHopExtraFilter(pickRow, thFilterCfg);
             });
@@ -12290,7 +12305,14 @@
             var mainPickRow = pickBatch.filter(function (pickRow) {
               return !isLegacySlrAutoTongHopDd3Row(pickRow);
             })[0] || null;
-            var mainPickRowPasses = !mainPickRow || passLegacySlrAutoTongHopExtraFilter(mainPickRow, thFilterCfg);
+            var dd3PickRows = pickBatch.filter(isLegacySlrAutoTongHopDd3Row);
+            var hasDd3SpecificFilter = thFilterCfg.minNgayCx3Nb !== null
+              || thFilterCfg.maxKtnLast !== null
+              || thFilterCfg.minZeroWeek !== null;
+            var dd3SpecificPass = !hasDd3SpecificFilter || dd3PickRows.some(function (pickRow) {
+              return passLegacySlrAutoTongHopDd3NbFilter(pickRow, thFilterCfg);
+            });
+            var mainPickRowPasses = (!mainPickRow || passLegacySlrAutoTongHopExtraFilter(mainPickRow, thFilterCfg)) && dd3SpecificPass;
             if (!mainPickRowPasses) {
               filteredOutCount += 1;
               continue;

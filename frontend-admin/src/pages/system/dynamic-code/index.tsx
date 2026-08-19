@@ -1101,20 +1101,16 @@ async function facebookValidateToken(accessToken: string): Promise<FacebookRespo
 /**
  * Exchange short-lived Facebook token for long-lived token (Google Index pattern)
  * @param accessToken Short-lived access token
- * @param clientId Facebook app ID
- * @param appSecret Facebook app secret
  * @returns Promise<FacebookResponse>
  */
 async function facebookExchangeToken(
   accessToken: string,
-  clientId: string,
-  appSecret: string,
 ): Promise<FacebookResponse> {
   let response: any;
   try {
     response = await request
       .post<FacebookResponse>('facebook/exchange-token', {
-        json: { accessToken, clientId, appSecret },
+        json: { accessToken },
         ignoreLoading: true,
       })
       .json<FacebookResponse>();
