@@ -11549,9 +11549,11 @@ async function callSeoPromptDirect(ctx, prompt) {
 
 /**
  * Client SEO timeout (ms).
- * - window.__CSM_AI_SEO_TIMEOUT_MS = 0  => chờ không giới hạn
+ * - window.__CSM_AI_SEO_TIMEOUT_MS = 0  => chờ không giới hạn (mặc định, khớp frontend-admin)
  * - > 0                                  => dùng giá trị cấu hình
- * - mặc định                              => 8 phút để tránh pending vô hạn ở trình duyệt
+ * - mặc định                              => 0 (chờ không giới hạn) — backend llama sinh bài SEO nhiều bước
+ *                                            có thể mất 10-60 phút; abort sớm chỉ huỷ client, backend vẫn
+ *                                            chạy tiếp và worker llama đơn luồng bị xếp hàng (không retry được).
  */
 function resolveSeoClientTimeoutMs() {
   if (typeof window !== "undefined") {
@@ -11560,7 +11562,7 @@ function resolveSeoClientTimeoutMs() {
     const n = Number(v);
     if (Number.isFinite(n) && n > 0) return n;
   }
-  return 8 * 60 * 1000;
+  return 0;
 }
 
 function buildSeoPromptFallbackFromOneShotContext(seoContext = {}) {
@@ -11698,13 +11700,9 @@ async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, p
 
         if (isAbort && timeoutMs > 0) {
           lastError = new Error(
-            `SEO timeout sau ${Math.round(timeoutMs / 60000)} phút tại ${url} (attempt ${attempt}/2). `
-            + `Có thể backend-go/LLM đang bận; thử lại hoặc đặt window.__CSM_AI_SEO_TIMEOUT_MS=0 nếu muốn chờ không giới hạn.`
+            `SEO bị huỷ sau ${Math.round(timeoutMs / 60000)} phút tại ${url} — không retry vì backend local AI có thể vẫn đang sinh. `
+            + `Đặt window.__CSM_AI_SEO_TIMEOUT_MS=0 để chờ không giới hạn (giống frontend-admin).`
           );
-          if (attempt < 2) {
-            await new Promise((resolve) => setTimeout(resolve, 600 * attempt));
-            continue;
-          }
           break;
         }
 
