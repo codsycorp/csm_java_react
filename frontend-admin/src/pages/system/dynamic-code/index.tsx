@@ -1090,9 +1090,19 @@ async function facebookValidateToken(accessToken: string): Promise<FacebookRespo
     return response;
   } catch (error: any) {
     console.error('❌ Error validating Facebook token:', error);
+    let message = error?.message || 'Token validation failed';
+    if (error?.response) {
+      try {
+        const raw = await error.response.clone().text();
+        const data = raw ? JSON.parse(raw) : {};
+        if (data?.message) {
+          message = String(data.message).replace(/^Error:\s*/, '');
+        }
+      } catch (_e) { /* keep transport message */ }
+    }
     return {
       success: false,
-      message: error?.message || 'Token validation failed',
+      message,
       error,
     };
   }
